@@ -78,7 +78,6 @@ func RunQueueV2TestSuite(t *testing.T, queue persistence.QueueV2) {
 		t.Parallel()
 		RunHistoryTaskQueueManagerTestSuite(t, queue)
 	})
-
 }
 
 func testHappyPath(
