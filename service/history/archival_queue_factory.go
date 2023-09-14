@@ -160,13 +160,12 @@ func (f *archivalQueueFactory) newScheduledQueue(shard shard.Context, executor q
 		metricsHandler,
 	)
 
+	factory := f.NewExecutableFactory(shard, executor, rescheduler, logger, metricsHandler, f.ExecutableWrapper)
 	return queues.NewScheduledQueue(
 		shard,
 		tasks.CategoryArchival,
 		f.HostScheduler,
 		rescheduler,
-		f.HostPriorityAssigner,
-		executor,
 		&queues.Options{
 			ReaderOptions: queues.ReaderOptions{
 				BatchSize:            f.Config.ArchivalTaskBatchSize,
@@ -188,5 +187,6 @@ func (f *archivalQueueFactory) newScheduledQueue(shard shard.Context, executor q
 		f.HostReaderRateLimiter,
 		logger,
 		metricsHandler,
+		factory,
 	)
 }

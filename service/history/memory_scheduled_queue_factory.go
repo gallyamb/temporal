@@ -34,7 +34,6 @@ import (
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/namespace"
 	ctasks "go.temporal.io/server/common/tasks"
-	"go.temporal.io/server/service/history/configs"
 	"go.temporal.io/server/service/history/queues"
 	"go.temporal.io/server/service/history/shard"
 	wcache "go.temporal.io/server/service/history/workflow/cache"
@@ -44,14 +43,7 @@ type (
 	memoryScheduledQueueFactoryParams struct {
 		fx.In
 
-		NamespaceRegistry namespace.Registry
-		ClusterMetadata   cluster.Metadata
-		Config            *configs.Config
-		TimeSource        clock.TimeSource
-		MetricsHandler    metrics.Handler
-		Logger            log.SnTaggedLogger
-
-		ExecutorWrapper queues.ExecutorWrapper `optional:"true"`
+		QueueFactoryBaseParams
 	}
 
 	memoryScheduledQueueFactory struct {
@@ -64,7 +56,8 @@ type (
 		metricsHandler    metrics.Handler
 		logger            log.SnTaggedLogger
 
-		executorWrapper queues.ExecutorWrapper
+		executorWrapper   queues.ExecutorWrapper
+		executableWrapper queues.ExecutableWrapper
 	}
 )
 
@@ -91,6 +84,7 @@ func NewMemoryScheduledQueueFactory(
 		metricsHandler:    metricsHandler,
 		logger:            logger,
 		executorWrapper:   params.ExecutorWrapper,
+		executableWrapper: params.ExecutableWrapper,
 	}
 }
 
@@ -122,6 +116,16 @@ func (f *memoryScheduledQueueFactory) CreateQueue(
 		speculativeWorkflowTaskTimeoutExecutor = f.executorWrapper.Wrap(speculativeWorkflowTaskTimeoutExecutor)
 	}
 
+	executableFactory := newExecutableFactory(
+		speculativeWorkflowTaskTimeoutExecutor,
+		nil,
+		nil,
+		f.priorityAssigner,
+		shardCtx,
+		f.logger,
+		f.metricsHandler,
+		f.executableWrapper,
+	)
 	return queues.NewSpeculativeWorkflowTaskTimeoutQueue(
 		f.scheduler,
 		f.priorityAssigner,
@@ -131,5 +135,6 @@ func (f *memoryScheduledQueueFactory) CreateQueue(
 		f.timeSource,
 		f.metricsHandler,
 		f.logger,
+		executableFactory,
 	)
 }

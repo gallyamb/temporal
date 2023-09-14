@@ -73,7 +73,8 @@ type (
 		Logger               log.SnTaggedLogger
 		SchedulerRateLimiter queues.SchedulerRateLimiter
 
-		ExecutorWrapper queues.ExecutorWrapper `optional:"true"`
+		ExecutorWrapper   queues.ExecutorWrapper   `optional:"true"`
+		ExecutableWrapper queues.ExecutableWrapper `optional:"true"`
 	}
 
 	QueueFactoryBase struct {
@@ -217,6 +218,55 @@ func (f *QueueFactoryBase) Stop() {
 	if f.HostScheduler != nil {
 		f.HostScheduler.Stop()
 	}
+}
+
+func (f *QueueFactoryBase) NewExecutableFactory(
+	shardContext shard.Context,
+	executor queues.Executor,
+	rescheduler queues.Rescheduler,
+	logger log.Logger,
+	metricsHandler metrics.Handler,
+	executableWrapper queues.ExecutableWrapper,
+) queues.ExecutableFactory {
+	scheduler := f.HostScheduler
+	priorityAssigner := f.HostPriorityAssigner
+	return newExecutableFactory(
+		executor,
+		scheduler,
+		rescheduler,
+		priorityAssigner,
+		shardContext,
+		logger,
+		metricsHandler,
+		executableWrapper,
+	)
+}
+
+func newExecutableFactory(
+	executor queues.Executor,
+	scheduler queues.Scheduler,
+	rescheduler queues.Rescheduler,
+	priorityAssigner queues.PriorityAssigner,
+	shardContext shard.Context,
+	logger log.Logger,
+	metricsHandler metrics.Handler,
+	executableWrapper queues.ExecutableWrapper,
+) queues.ExecutableFactory {
+	factory := queues.NewExecutableFactory(
+		executor,
+		scheduler,
+		rescheduler,
+		priorityAssigner,
+		shardContext.GetTimeSource(),
+		shardContext.GetNamespaceRegistry(),
+		shardContext.GetClusterMetadata(),
+		logger,
+		metricsHandler,
+	)
+	if executableWrapper == nil {
+		return factory
+	}
+	return queues.NewExecutableFactoryWrapper(factory, executableWrapper)
 }
 
 func NewQueueHostRateLimiter(

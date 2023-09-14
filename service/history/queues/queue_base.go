@@ -94,8 +94,8 @@ type (
 		logger         log.Logger
 		metricsHandler metrics.Handler
 
-		paginationFnProvider  PaginationFnProvider
-		executableInitializer ExecutableInitializer
+		paginationFnProvider PaginationFnProvider
+		executableFactory    ExecutableFactory
 
 		lastRangeID                    int64
 		exclusiveDeletionHighWatermark tasks.Key
@@ -123,20 +123,7 @@ type (
 	}
 )
 
-func newQueueBase(
-	shard hshard.Context,
-	category tasks.Category,
-	paginationFnProvider PaginationFnProvider,
-	scheduler Scheduler,
-	rescheduler Rescheduler,
-	priorityAssigner PriorityAssigner,
-	executor Executor,
-	options *Options,
-	hostReaderRateLimiter quotas.RequestRateLimiter,
-	completionFn ReaderCompletionFn,
-	logger log.Logger,
-	metricsHandler metrics.Handler,
-) *queueBase {
+func newQueueBase(shard hshard.Context, category tasks.Category, paginationFnProvider PaginationFnProvider, scheduler Scheduler, rescheduler Rescheduler, options *Options, hostReaderRateLimiter quotas.RequestRateLimiter, completionFn ReaderCompletionFn, logger log.Logger, metricsHandler metrics.Handler, executableInitializer ExecutableFactory) *queueBase {
 	var readerScopes map[int64][]Scope
 	var exclusiveReaderHighWatermark tasks.Key
 	if persistenceState, ok := shard.GetQueueState(category); ok {
@@ -154,24 +141,7 @@ func newQueueBase(
 		exclusiveReaderHighWatermark = ackLevel
 	}
 
-	timeSource := shard.GetTimeSource()
-	executableInitializer := func(readerID int64, t tasks.Task) Executable {
-		return NewExecutable(
-			readerID,
-			t,
-			executor,
-			scheduler,
-			rescheduler,
-			priorityAssigner,
-			timeSource,
-			shard.GetNamespaceRegistry(),
-			shard.GetClusterMetadata(),
-			logger,
-			metricsHandler,
-		)
-	}
-
-	monitor := newMonitor(category.Type(), timeSource, &options.MonitorOptions)
+	monitor := newMonitor(category.Type(), shard.GetTimeSource(), &options.MonitorOptions)
 	readerRateLimiter := newShardReaderRateLimiter(
 		options.MaxPollRPS,
 		hostReaderRateLimiter,
@@ -194,7 +164,7 @@ func newQueueBase(
 			&readerOptions,
 			scheduler,
 			rescheduler,
-			timeSource,
+			shard.GetTimeSource(),
 			readerRateLimiter,
 			monitor,
 			completionFn,
@@ -256,8 +226,8 @@ func newQueueBase(
 		logger:         logger,
 		metricsHandler: metricsHandler,
 
-		paginationFnProvider:  paginationFnProvider,
-		executableInitializer: executableInitializer,
+		paginationFnProvider: paginationFnProvider,
+		executableFactory:    executableInitializer,
 
 		lastRangeID:                    -1, // start from an invalid rangeID
 		exclusiveDeletionHighWatermark: exclusiveDeletionHighWatermark,
@@ -332,7 +302,7 @@ func (p *queueBase) processNewRange() {
 		newReadScope, p.nonReadableScope = p.nonReadableScope.SplitByRange(newMaxKey)
 		slices = append(slices, NewSlice(
 			p.paginationFnProvider,
-			p.executableInitializer,
+			p.executableFactory,
 			p.monitor,
 			newReadScope,
 		))

@@ -45,6 +45,7 @@ type (
 		timeSource        clock.TimeSource
 		metricsHandler    metrics.Handler
 		logger            log.SnTaggedLogger
+		executableFactory ExecutableFactory
 	}
 )
 
@@ -57,9 +58,8 @@ func NewSpeculativeWorkflowTaskTimeoutQueue(
 	timeSource clock.TimeSource,
 	metricsHandler metrics.Handler,
 	logger log.SnTaggedLogger,
-
+	executableFactory ExecutableFactory,
 ) *SpeculativeWorkflowTaskTimeoutQueue {
-
 	timeoutQueue := newMemoryScheduledQueue(
 		scheduler,
 		timeSource,
@@ -76,6 +76,7 @@ func NewSpeculativeWorkflowTaskTimeoutQueue(
 		timeSource:        timeSource,
 		metricsHandler:    metricsHandler,
 		logger:            logger,
+		executableFactory: executableFactory,
 	}
 }
 
@@ -94,19 +95,9 @@ func (q SpeculativeWorkflowTaskTimeoutQueue) Category() tasks.Category {
 func (q SpeculativeWorkflowTaskTimeoutQueue) NotifyNewTasks(ts []tasks.Task) {
 	for _, task := range ts {
 		if wttt, ok := task.(*tasks.WorkflowTaskTimeoutTask); ok {
-			executable := newSpeculativeWorkflowTaskTimeoutExecutable(NewExecutable(
-				0,
-				wttt,
-				q.executor,
-				nil,
-				nil,
-				q.priorityAssigner,
-				q.timeSource,
-				q.namespaceRegistry,
-				q.clusterMetadata,
-				q.logger,
-				q.metricsHandler,
-			), wttt)
+			executable := newSpeculativeWorkflowTaskTimeoutExecutable(
+				q.executableFactory.NewExecutable(wttt, 0), wttt,
+			)
 			q.timeoutQueue.Add(executable)
 		}
 	}

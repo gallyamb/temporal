@@ -118,20 +118,30 @@ func (s *scheduledQueueSuite) SetupTest() {
 		metrics.NoopMetricsHandler,
 	)
 
+	var logger log.Logger = log.NewTestLogger()
+	factory := NewExecutableFactory(nil,
+		scheduler,
+		rescheduler,
+		nil,
+		s.mockShard.GetTimeSource(),
+		s.mockShard.GetNamespaceRegistry(),
+		s.mockShard.GetClusterMetadata(),
+		logger,
+		metrics.NoopMetricsHandler,
+	)
 	s.scheduledQueue = NewScheduledQueue(
 		s.mockShard,
 		tasks.CategoryTimer,
 		scheduler,
 		rescheduler,
-		nil,
-		nil,
 		testQueueOptions,
 		NewReaderPriorityRateLimiter(
 			func() float64 { return 10 },
 			1,
 		),
-		log.NewTestLogger(),
+		logger,
 		metrics.NoopMetricsHandler,
+		factory,
 	)
 }
 
