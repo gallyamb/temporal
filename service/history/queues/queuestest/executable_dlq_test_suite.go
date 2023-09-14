@@ -73,7 +73,7 @@ func TestExecutable(t *testing.T, tqm persistence.HistoryTaskQueueManager) {
 			clusterMetadata := NewClusterMetadata(clusterName)
 
 			var executable queues.Executable = NewFakeExecutable(task, tc.err)
-			executable = queues.NewExecutableDLQ(tqm, executable, clusterMetadata)
+			executable = queues.NewExecutableDLQ(executable, tqm, clusterMetadata)
 			err := executable.Execute()
 			assert.ErrorContains(t, err, tc.err.Error())
 			if tc.shouldDLQ {

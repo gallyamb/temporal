@@ -89,11 +89,7 @@ func TestDLQExecutable_TerminalErrors(t *testing.T) {
 
 			dlq := &testDLQ{}
 			executable := newExecutable(tc.err)
-			dlqExecutable := queues.NewExecutableDLQ(
-				dlq,
-				executable,
-				queuestest.NewClusterMetadata("test-cluster-name"),
-			)
+			dlqExecutable := queues.NewExecutableDLQ(executable, dlq, queuestest.NewClusterMetadata("test-cluster-name"))
 			err := dlqExecutable.Execute()
 			assert.ErrorIs(t, err, queues.ErrTerminalTaskFailure)
 			assert.ErrorContains(t, err, tc.err.Error())
@@ -119,7 +115,7 @@ func TestDLQExecutable_NilError(t *testing.T) {
 	t.Parallel()
 	dlq := &testDLQ{}
 	executable := newExecutable(nil)
-	dlqExecutable := queues.NewExecutableDLQ(dlq, executable, queuestest.NewClusterMetadata("test-cluster-name"))
+	dlqExecutable := queues.NewExecutableDLQ(executable, dlq, queuestest.NewClusterMetadata("test-cluster-name"))
 	err := dlqExecutable.Execute()
 	assert.NoError(t, err)
 	assert.Empty(t, dlq.requests, "Nil error should not be sent to DLQ")
@@ -133,7 +129,7 @@ func TestDLQExecutable_RandomErr(t *testing.T) {
 	originalErr := errors.New("some non-terminal error")
 	dlq := &testDLQ{}
 	executable := newExecutable(originalErr)
-	dlqExecutable := queues.NewExecutableDLQ(dlq, executable, queuestest.NewClusterMetadata("test-cluster-name"))
+	dlqExecutable := queues.NewExecutableDLQ(executable, dlq, queuestest.NewClusterMetadata("test-cluster-name"))
 	for i := 0; i < 2; i++ {
 		// simulate the client retrying the task
 		err := dlqExecutable.Execute()
@@ -151,7 +147,7 @@ func TestDLQExecutable_DLQErr(t *testing.T) {
 	originalErr := new(serialization.DeserializationError)
 	dlq := &testDLQ{err: dlqErr}
 	executable := newExecutable(originalErr)
-	dlqExecutable := queues.NewExecutableDLQ(dlq, executable, queuestest.NewClusterMetadata("test-cluster-name"))
+	dlqExecutable := queues.NewExecutableDLQ(executable, dlq, queuestest.NewClusterMetadata("test-cluster-name"))
 
 	err := dlqExecutable.Execute()
 	assert.ErrorIs(t, err, queues.ErrTerminalTaskFailure, "First call to Execute for a terminal error should return"+

@@ -72,7 +72,7 @@ var (
 )
 
 // NewExecutableDLQ wraps an Executable to ensure that it is sent to the DLQ if it fails terminally.
-func NewExecutableDLQ(dlq DLQ, executable Executable, clusterMetadata ClusterMetadata) *ExecutableDLQ {
+func NewExecutableDLQ(executable Executable, dlq DLQ, clusterMetadata ClusterMetadata) *ExecutableDLQ {
 	return &ExecutableDLQ{
 		Executable:      executable,
 		dlq:             dlq,
