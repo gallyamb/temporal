@@ -950,6 +950,7 @@ var (
 	NoRecentPollerTasksPerTaskQueueCounter    = NewCounterDef("no_poller_tasks")
 	UnknownBuildPollsCounter                  = NewCounterDef("unknown_build_polls")
 	UnknownBuildTasksCounter                  = NewCounterDef("unknown_build_tasks")
+	TaskDispatchLatencyPerTaskQueue           = NewTimerDef("task_dispatch_latency")
 
 	// Worker
 	ExecutorTasksDoneCount                          = NewCounterDef("executor_done")
