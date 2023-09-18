@@ -29,6 +29,10 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"go.temporal.io/server/common/clock"
+	"go.temporal.io/server/common/metrics"
+	"go.temporal.io/server/service/history/configs"
+	"go.temporal.io/server/service/history/tasks"
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxtest"
 
@@ -85,16 +89,30 @@ func TestNewExecutableDLQWrapper(t *testing.T) {
 					func() cluster.Metadata {
 						return fakeMetadata{}
 					},
-					func() *dynamicconfig.Collection {
+					func(logger log.Logger) *dynamicconfig.Collection {
 						return dynamicconfig.NewCollection(dynamicconfig.StaticClient(map[dynamicconfig.Key]interface{}{
 							dynamicconfig.HistoryTaskDLQEnabled: tc.enableDLQ,
-						}), log.NewTestLogger())
+						}), logger)
+					},
+					func() log.Logger {
+						return log.NewTestLogger()
+					},
+					func() *configs.Config {
+						return &configs.Config{
+							NumberOfShards: 1,
+						}
+					},
+					func() metrics.Handler {
+						return metrics.NoopMetricsHandler
+					},
+					func() clock.TimeSource {
+						return clock.NewEventTimeSource()
 					},
 					fx.Annotate(history.NewExecutableDLQWrapper, fx.As(new(queues.ExecutableWrapper))),
 				),
 				fx.Populate(&w),
 			)
-			executable := w.Wrap(queuestest.NewFakeExecutable(nil, errTerminal))
+			executable := w.Wrap(queuestest.NewFakeExecutable(&tasks.WorkflowTask{}, errTerminal))
 
 			err := executable.Execute()
 			if tc.enableDLQ {

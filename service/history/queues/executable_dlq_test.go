@@ -25,7 +25,6 @@
 package queues_test
 
 import (
-	"context"
 	"errors"
 	"testing"
 
@@ -39,13 +38,6 @@ import (
 )
 
 type (
-	// testDLQ is a DLQ which records the requests it receives and returns the given error upon DLQ.EnqueueTask.
-	testDLQ struct {
-		// requests to write to the DLQ
-		requests []*persistence.EnqueueTaskRequest
-		// err to return on EnqueueTask
-		err error
-	}
 	// fakeTask is needed to compare tasks.Task values by identity
 	fakeTask struct {
 		tasks.Task
@@ -56,14 +48,6 @@ var (
 	// testTask is an arbitrary task that we use to verify that the correct task is enqueued to the DLQ
 	testTask tasks.Task = fakeTask{}
 )
-
-func (d *testDLQ) EnqueueTask(
-	_ context.Context,
-	request *persistence.EnqueueTaskRequest,
-) (*persistence.EnqueueTaskResponse, error) {
-	d.requests = append(d.requests, request)
-	return nil, d.err
-}
 
 func TestDLQExecutable_TerminalErrors(t *testing.T) {
 	// Verify that if Executable.Execute returns a terminal error, the task is sent to the DLQ
@@ -87,7 +71,7 @@ func TestDLQExecutable_TerminalErrors(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			dlq := &testDLQ{}
+			dlq := &queuestest.FakeDLQ{}
 			executable := newExecutable(tc.err)
 			dlqExecutable := queues.NewExecutableDLQ(executable, dlq, queuestest.NewClusterMetadata("test-cluster-name"))
 			err := dlqExecutable.Execute()
@@ -98,13 +82,13 @@ func TestDLQExecutable_TerminalErrors(t *testing.T) {
 			assert.Equal(t, 1, executable.GetCalls())
 			assert.NoError(t, err)
 
-			require.Len(t, dlq.requests, 1)
+			require.Len(t, dlq.Requests, 1)
 			assert.Equal(t, &persistence.EnqueueTaskRequest{
 				QueueType:     persistence.QueueTypeHistoryDLQ,
 				SourceCluster: "test-cluster-name",
 				TargetCluster: "test-cluster-name",
 				Task:          testTask,
-			}, dlq.requests[0])
+			}, dlq.Requests[0])
 		})
 	}
 }
@@ -113,12 +97,12 @@ func TestDLQExecutable_NilError(t *testing.T) {
 	// Verify that successful calls to Execute do not send the task to the DLQ
 
 	t.Parallel()
-	dlq := &testDLQ{}
+	dlq := &queuestest.FakeDLQ{}
 	executable := newExecutable(nil)
 	dlqExecutable := queues.NewExecutableDLQ(executable, dlq, queuestest.NewClusterMetadata("test-cluster-name"))
 	err := dlqExecutable.Execute()
 	assert.NoError(t, err)
-	assert.Empty(t, dlq.requests, "Nil error should not be sent to DLQ")
+	assert.Empty(t, dlq.Requests, "Nil error should not be sent to DLQ")
 }
 
 func TestDLQExecutable_RandomErr(t *testing.T) {
@@ -127,7 +111,7 @@ func TestDLQExecutable_RandomErr(t *testing.T) {
 	t.Parallel()
 
 	originalErr := errors.New("some non-terminal error")
-	dlq := &testDLQ{}
+	dlq := &queuestest.FakeDLQ{}
 	executable := newExecutable(originalErr)
 	dlqExecutable := queues.NewExecutableDLQ(executable, dlq, queuestest.NewClusterMetadata("test-cluster-name"))
 	for i := 0; i < 2; i++ {
@@ -135,7 +119,7 @@ func TestDLQExecutable_RandomErr(t *testing.T) {
 		err := dlqExecutable.Execute()
 		assert.ErrorIs(t, err, originalErr)
 	}
-	assert.Empty(t, dlq.requests, "Non-terminal error should not be sent to DLQ")
+	assert.Empty(t, dlq.Requests, "Non-terminal error should not be sent to DLQ")
 }
 
 func TestDLQExecutable_DLQErr(t *testing.T) {
@@ -145,7 +129,7 @@ func TestDLQExecutable_DLQErr(t *testing.T) {
 
 	dlqErr := errors.New("error writing task to queue")
 	originalErr := new(serialization.DeserializationError)
-	dlq := &testDLQ{err: dlqErr}
+	dlq := &queuestest.FakeDLQ{Err: dlqErr}
 	executable := newExecutable(originalErr)
 	dlqExecutable := queues.NewExecutableDLQ(executable, dlq, queuestest.NewClusterMetadata("test-cluster-name"))
 
@@ -161,9 +145,9 @@ func TestDLQExecutable_DLQErr(t *testing.T) {
 			" ErrSendTaskToDLQ if the DLQ is still returning an error")
 	}
 
-	require.Len(t, dlq.requests, 2, "The DLQ should have received two requests: one for each call"+
+	require.Len(t, dlq.Requests, 2, "The DLQ should have received two requests: one for each call"+
 		" to Execute after the first")
-	for _, r := range dlq.requests {
+	for _, r := range dlq.Requests {
 		assert.Equal(t, &persistence.EnqueueTaskRequest{
 			QueueType:     persistence.QueueTypeHistoryDLQ,
 			SourceCluster: "test-cluster-name",

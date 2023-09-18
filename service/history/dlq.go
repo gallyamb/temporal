@@ -25,6 +25,10 @@
 package history
 
 import (
+	"go.temporal.io/server/common/clock"
+	"go.temporal.io/server/common/log"
+	"go.temporal.io/server/common/metrics"
+	"go.temporal.io/server/service/history/configs"
 	"go.uber.org/fx"
 
 	"go.temporal.io/server/common/cluster"
@@ -43,10 +47,14 @@ type (
 		HistoryTaskQueueManager persistence.HistoryTaskQueueManager
 		ClusterMetadata         cluster.Metadata
 		DC                      *dynamicconfig.Collection
+		Config                  *configs.Config
+		MetricsHandler          metrics.Handler
+		Logger                  log.Logger
+		TimeSource              clock.TimeSource
 	}
 	executableToggle struct {
 		queues.Executable
-		executableDLQ *queues.ExecutableDLQ
+		executableDLQ queues.Executable
 		useDLQ        dynamicconfig.BoolPropertyFn
 	}
 )
@@ -57,9 +65,16 @@ func NewExecutableDLQWrapper(params executableDLQWrapperParams) queues.Executabl
 
 func (d executableDLQWrapper) Wrap(e queues.Executable) queues.Executable {
 	executableDLQ := queues.NewExecutableDLQ(e, d.HistoryTaskQueueManager, d.ClusterMetadata)
+	executableDLQObserver := queues.NewExecutableDLQObserver(
+		executableDLQ,
+		d.Logger,
+		d.MetricsHandler,
+		d.TimeSource,
+		int(d.Config.NumberOfShards),
+	)
 	return &executableToggle{
 		Executable:    e,
-		executableDLQ: executableDLQ,
+		executableDLQ: executableDLQObserver,
 		useDLQ:        d.DC.GetBoolProperty(dynamicconfig.HistoryTaskDLQEnabled, false),
 	}
 }
