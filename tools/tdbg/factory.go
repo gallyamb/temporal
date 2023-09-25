@@ -113,7 +113,7 @@ func (b *clientFactory) createGRPCConnection(c *cli.Context) (*grpc.ClientConn, 
 		grpcSecurityOptions,
 	}
 
-	connection, err := grpc.Dial(hostPort, dialOpts...)
+	connection, err := grpc.Dial("membership://frontend", dialOpts...)
 	if err != nil {
 		b.logger.Fatal("Failed to create connection", tag.Error(err))
 		return nil, err
