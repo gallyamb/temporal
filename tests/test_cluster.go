@@ -35,6 +35,8 @@ import (
 
 	"github.com/pborman/uuid"
 	"go.temporal.io/api/operatorservice/v1"
+	"go.temporal.io/server/common/primitives"
+	"go.uber.org/fx"
 	"go.uber.org/multierr"
 
 	"go.temporal.io/server/api/adminservice/v1"
@@ -96,6 +98,7 @@ type (
 		DynamicConfigOverrides map[dynamicconfig.Key]interface{}
 		GenerateMTLS           bool
 		EnableMetricsCapture   bool
+		ServiceFxOptions       map[primitives.ServiceName][]fx.Option
 	}
 
 	// WorkerConfig is the config for enabling/disabling Temporal worker
@@ -259,6 +262,7 @@ func NewCluster(options *TestClusterConfig, logger log.Logger) (*TestCluster, er
 		NamespaceReplicationTaskExecutor: namespace.NewReplicationTaskExecutor(options.ClusterMetadata.CurrentClusterName, testBase.MetadataManager, logger),
 		DynamicConfigOverrides:           options.DynamicConfigOverrides,
 		TLSConfigProvider:                tlsConfigProvider,
+		ServiceFxOptions:                 options.ServiceFxOptions,
 	}
 
 	if options.EnableMetricsCapture {
