@@ -468,7 +468,7 @@ func (m *sqlExecutionStore) GetHistoryTree(
 	ctx context.Context,
 	request *p.GetHistoryTreeRequest,
 ) (*p.InternalGetHistoryTreeResponse, error) {
-	treeID, err := primitives.ParseUUID(request.TreeID)
+	treeID, err := primitives.ParseUUID(request.BranchInfo.TreeId)
 	if err != nil {
 		return nil, err
 	}

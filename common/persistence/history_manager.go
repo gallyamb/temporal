@@ -160,8 +160,8 @@ func (m *executionManagerImpl) DeleteHistoryBranch(
 
 	// Get the entire history tree, so we know if any part of the target branch is referenced by other branches.
 	historyTreeResp, err := m.GetHistoryTree(ctx, &GetHistoryTreeRequest{
-		TreeID:  branch.TreeId,
-		ShardID: request.ShardID,
+		ShardID:    request.ShardID,
+		BranchInfo: branch,
 	})
 	if err != nil {
 		return err
@@ -323,13 +323,35 @@ func (m *executionManagerImpl) GetHistoryTree(
 	if err != nil {
 		return nil, err
 	}
-	branchInfos := make([]*persistencespb.HistoryBranch, 0, len(resp.TreeInfos))
+	rootBranchInferred := true
+	rootBranchSoftDelete := false
+	branchInfos := make([]*persistencespb.HistoryBranch, 0, len(resp.TreeInfos)+1)
 	for _, blob := range resp.TreeInfos {
 		treeInfo, err := m.serializer.HistoryTreeInfoFromBlob(blob)
 		if err != nil {
 			return nil, err
 		}
+		if treeInfo.BranchInfo.Ancestors == nil {
+			rootBranchInferred = false
+			if treeInfo.SoftDelete {
+				rootBranchSoftDelete = true
+			}
+		}
+		if treeInfo.SoftDelete {
+			continue
+		}
 		branchInfos = append(branchInfos, treeInfo.BranchInfo)
+	}
+	if rootBranchInferred && !rootBranchSoftDelete {
+		rootID := request.BranchInfo.BranchId
+		if request.BranchInfo.Ancestors != nil {
+			// If branch has ancestors, then branch itself is not the root; otherwise first ancestor is the root branch.
+			rootID = request.BranchInfo.Ancestors[0].BranchId
+		}
+		branchInfos = append(branchInfos, &persistencespb.HistoryBranch{
+			TreeId:   request.BranchInfo.TreeId,
+			BranchId: rootID,
+		})
 	}
 	return &GetHistoryTreeResponse{BranchInfos: branchInfos}, nil
 }

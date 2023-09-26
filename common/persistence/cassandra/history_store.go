@@ -29,10 +29,15 @@ import (
 	"fmt"
 
 	commonpb "go.temporal.io/api/common/v1"
+	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/serviceerror"
+
+	persistencespb "go.temporal.io/server/api/persistence/v1"
+	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/log"
 	p "go.temporal.io/server/common/persistence"
 	"go.temporal.io/server/common/persistence/nosql/nosqlplugin/cassandra/gocql"
+	"go.temporal.io/server/common/persistence/serialization"
 	"go.temporal.io/server/common/primitives"
 )
 
@@ -94,7 +99,7 @@ func (h *HistoryStore) AppendHistoryNodes(
 	branchInfo := request.BranchInfo
 	node := request.Node
 
-	if !request.IsNewBranch {
+	if !request.IsNewBranch || true { // TODO: use dynamic config to
 		query := h.Session.Query(v2templateUpsertHistoryNode,
 			branchInfo.TreeId,
 			branchInfo.BranchId,
@@ -297,11 +302,25 @@ func (h *HistoryStore) DeleteHistoryBranch(
 ) error {
 
 	batch := h.Session.NewBatch(gocql.LoggedBatch).WithContext(ctx)
-	batch.Query(v2templateDeleteBranch, request.BranchInfo.TreeId, request.BranchInfo.BranchId)
+	//batch.Query(v2templateDeleteBranch, request.BranchInfo.TreeId, request.BranchInfo.BranchId)
 
 	// delete each branch range
 	for _, br := range request.BranchRanges {
-		h.deleteBranchRangeNodes(batch, request.BranchInfo.TreeId, br.BranchId, br.BeginNodeId)
+		var softDeleteTreeInfoData []byte
+		if request.BranchInfo.Ancestors == nil && br.BeginNodeId > common.FirstEventID {
+			// NOTE: soft delete record does not contain the ForkTime and Info fields
+			treeInfoBlob, err := serialization.ProtoEncodeBlob(&persistencespb.HistoryTreeInfo{
+				BranchToken: request.BranchToken,
+				BranchInfo:  request.BranchInfo,
+				SoftDelete:  true,
+			}, enumspb.ENCODING_TYPE_PROTO3)
+			if err != nil {
+				return err
+			}
+			softDeleteTreeInfoData = treeInfoBlob.Data
+		}
+
+		h.deleteBranchRangeNodes(batch, request.BranchInfo.TreeId, br.BranchId, br.BeginNodeId, softDeleteTreeInfoData)
 	}
 
 	err := h.Session.ExecuteBatch(batch)
@@ -316,7 +335,15 @@ func (h *HistoryStore) deleteBranchRangeNodes(
 	treeID string,
 	branchID string,
 	beginNodeID int64,
+	softDeleteTreeInfoData []byte,
 ) {
+
+	// NOTE: can't actually batch the following in practice b/c they won't reside on the same db
+	if softDeleteTreeInfoData != nil {
+		batch.Query(v2templateInsertTree, treeID, branchID, softDeleteTreeInfoData, enumspb.ENCODING_TYPE_PROTO3.String())
+	} else {
+		batch.Query(v2templateDeleteBranch, treeID, branchID)
+	}
 
 	batch.Query(v2templateRangeDeleteHistoryNode,
 		treeID,
@@ -377,7 +404,7 @@ func (h *HistoryStore) GetHistoryTree(
 	request *p.GetHistoryTreeRequest,
 ) (*p.InternalGetHistoryTreeResponse, error) {
 
-	treeID, err := primitives.ValidateUUID(request.TreeID)
+	treeID, err := primitives.ValidateUUID(request.BranchInfo.TreeId)
 	if err != nil {
 		return nil, serviceerror.NewInternal(fmt.Sprintf("ReadHistoryBranch. Gocql TreeId UUID cast failed. Error: %v", err))
 	}

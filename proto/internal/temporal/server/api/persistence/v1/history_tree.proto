@@ -36,6 +36,7 @@ message HistoryTreeInfo {
     string info = 3;
     // Deprecating branch token in favor of branch info.
     bytes branch_token = 4 [deprecated = true];
+    bool soft_delete = 5;
 }
 
 // For history persistence to serialize/deserialize branch details.

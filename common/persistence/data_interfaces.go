@@ -944,10 +944,10 @@ type (
 
 	// GetHistoryTreeRequest is used to retrieve branch info of a history tree
 	GetHistoryTreeRequest struct {
-		// A UUID of a tree
-		TreeID string
 		// Get data from this shard
 		ShardID int32
+		// branch to retrieve tree for
+		BranchInfo *persistencespb.HistoryBranch
 	}
 
 	// HistoryBranchDetail contains detailed information of a branch
