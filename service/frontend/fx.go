@@ -311,10 +311,22 @@ func RateLimitInterceptorProvider(
 
 	return interceptor.NewRateLimitInterceptor(
 		configs.NewRequestToRateLimiter(
-			quotas.NewDefaultIncomingRateLimiter(rateFn),
-			quotas.NewDefaultIncomingRateLimiter(rateFn),
-			quotas.NewDefaultIncomingRateLimiter(namespaceReplicationInducingRateFn),
-			quotas.NewDefaultIncomingRateLimiter(rateFn),
+			quotas.NewDefaultIncomingRateLimiter(
+				rateFn,
+				quotas.WithName("executionRateBurstFn"),
+			),
+			quotas.NewDefaultIncomingRateLimiter(
+				rateFn,
+				quotas.WithName("visibilityRateBurstFn"),
+			),
+			quotas.NewDefaultIncomingRateLimiter(
+				namespaceReplicationInducingRateFn,
+				quotas.WithName("namespaceReplicationInducingRateBurstFn"),
+			),
+			quotas.NewDefaultIncomingRateLimiter(
+				rateFn,
+				quotas.WithName("otherRateBurstFn"),
+			),
 			serviceConfig.OperatorRPSRatio,
 		),
 		map[string]int{},
