@@ -30,7 +30,7 @@ import (
 )
 
 const (
-	defaultRefreshInterval        = time.Minute
+	defaultRefreshInterval        = time.Millisecond
 	defaultIncomingRateBurstRatio = float64(2)
 	defaultOutgoingRateBurstRatio = float64(1)
 )
@@ -55,9 +55,9 @@ func NewDynamicRateLimiter(
 ) *DynamicRateLimiterImpl {
 	rateLimiter := &DynamicRateLimiterImpl{
 		rateBurstFn:     rateBurstFn,
-		refreshInterval: refreshInterval,
+		refreshInterval: time.Millisecond,
 
-		refreshTimer: time.NewTimer(refreshInterval),
+		refreshTimer: time.NewTimer(time.Millisecond),
 		rateLimiter:  NewRateLimiter(rateBurstFn.Rate(), rateBurstFn.Burst()),
 	}
 	return rateLimiter

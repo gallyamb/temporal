@@ -29,15 +29,18 @@ import (
 	"net"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.temporal.io/api/workflowservice/v1"
-	"go.temporal.io/server/common/membership"
-	"go.temporal.io/server/internal/nettest"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+
+	"go.temporal.io/server/common/membership"
+	"go.temporal.io/server/common/rpc/interceptor"
+	"go.temporal.io/server/internal/nettest"
 )
 
 type testCase struct {
@@ -61,7 +64,7 @@ type testCase struct {
 	configure func(tc *testCase)
 }
 
-func TestRateLimitInterceptorProvider(t *testing.T) {
+func TestRateLimitInterceptorProvider_DifferentValues(t *testing.T) {
 	t.Parallel()
 
 	// The burst limit is 2 * the rps limit, so this is 8, which is < the number of requests. The interceptor should
@@ -76,7 +79,6 @@ func TestRateLimitInterceptorProvider(t *testing.T) {
 	numHosts := 10
 	lowGlobalRPSLimit := lowPerInstanceRPSLimit * numHosts
 	highGlobalRPSLimit := highPerInstanceRPSLimit * numHosts
-	operatorRPSRatio := 0.2
 
 	testCases := []testCase{
 		{
@@ -84,7 +86,6 @@ func TestRateLimitInterceptorProvider(t *testing.T) {
 			configure: func(tc *testCase) {
 				tc.globalRPSLimit = lowGlobalRPSLimit
 				tc.perInstanceRPSLimit = lowPerInstanceRPSLimit
-				tc.operatorRPSRatio = operatorRPSRatio
 				tc.expectRateLimit = true
 			},
 		},
@@ -93,7 +94,6 @@ func TestRateLimitInterceptorProvider(t *testing.T) {
 			configure: func(tc *testCase) {
 				tc.globalRPSLimit = lowGlobalRPSLimit
 				tc.perInstanceRPSLimit = highPerInstanceRPSLimit
-				tc.operatorRPSRatio = operatorRPSRatio
 				tc.expectRateLimit = true
 			},
 		},
@@ -102,7 +102,6 @@ func TestRateLimitInterceptorProvider(t *testing.T) {
 			configure: func(tc *testCase) {
 				tc.globalRPSLimit = highGlobalRPSLimit
 				tc.perInstanceRPSLimit = lowPerInstanceRPSLimit
-				tc.operatorRPSRatio = operatorRPSRatio
 				tc.expectRateLimit = false
 			},
 		},
@@ -111,7 +110,6 @@ func TestRateLimitInterceptorProvider(t *testing.T) {
 			configure: func(tc *testCase) {
 				tc.globalRPSLimit = highGlobalRPSLimit
 				tc.perInstanceRPSLimit = highPerInstanceRPSLimit
-				tc.operatorRPSRatio = operatorRPSRatio
 				tc.expectRateLimit = false
 			},
 		},
@@ -120,7 +118,6 @@ func TestRateLimitInterceptorProvider(t *testing.T) {
 			configure: func(tc *testCase) {
 				tc.globalRPSLimit = 0
 				tc.perInstanceRPSLimit = highPerInstanceRPSLimit
-				tc.operatorRPSRatio = operatorRPSRatio
 				tc.expectRateLimit = false
 			},
 		},
@@ -129,7 +126,6 @@ func TestRateLimitInterceptorProvider(t *testing.T) {
 			configure: func(tc *testCase) {
 				tc.globalRPSLimit = 0
 				tc.perInstanceRPSLimit = lowPerInstanceRPSLimit
-				tc.operatorRPSRatio = operatorRPSRatio
 				tc.expectRateLimit = true
 			},
 		},
@@ -138,7 +134,6 @@ func TestRateLimitInterceptorProvider(t *testing.T) {
 			configure: func(tc *testCase) {
 				tc.globalRPSLimit = 0
 				tc.perInstanceRPSLimit = 0
-				tc.operatorRPSRatio = operatorRPSRatio
 				tc.expectRateLimit = true
 			},
 		},
@@ -147,7 +142,6 @@ func TestRateLimitInterceptorProvider(t *testing.T) {
 			configure: func(tc *testCase) {
 				tc.globalRPSLimit = lowPerInstanceRPSLimit
 				tc.perInstanceRPSLimit = highPerInstanceRPSLimit
-				tc.operatorRPSRatio = operatorRPSRatio
 				tc.expectRateLimit = false
 				tc.serviceResolver = nil
 			},
@@ -157,7 +151,6 @@ func TestRateLimitInterceptorProvider(t *testing.T) {
 			configure: func(tc *testCase) {
 				tc.globalRPSLimit = lowPerInstanceRPSLimit
 				tc.perInstanceRPSLimit = highPerInstanceRPSLimit
-				tc.operatorRPSRatio = operatorRPSRatio
 				tc.expectRateLimit = false
 				serviceResolver := membership.NewMockServiceResolver(gomock.NewController(tc.t))
 				serviceResolver.EXPECT().MemberCount().Return(0).AnyTimes()
@@ -172,6 +165,7 @@ func TestRateLimitInterceptorProvider(t *testing.T) {
 			t.Parallel()
 
 			tc.numRequests = 10
+			tc.operatorRPSRatio = 0.2
 			tc.t = t
 			{
 				// Create a mock service resolver which returns the number of frontend hosts.
@@ -200,52 +194,126 @@ func TestRateLimitInterceptorProvider(t *testing.T) {
 				},
 			}, tc.serviceResolver)
 
-			// Create a gRPC server for the fake workflow service.
-			svc := &testSvc{}
-			server := grpc.NewServer(grpc.UnaryInterceptor(rateLimitInterceptor.Intercept))
-			workflowservice.RegisterWorkflowServiceServer(server, svc)
-
-			pipe := nettest.NewPipe()
-
-			var wg sync.WaitGroup
-			defer wg.Wait()
-			wg.Add(1)
-
-			listener := nettest.NewListener(pipe)
-			go func() {
-				defer wg.Done()
-
-				_ = server.Serve(listener)
-			}()
-
-			// Create a gRPC client to the fake workflow service.
-			dialer := grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
-				return pipe.Connect(ctx.Done())
-			})
-			transportCredentials := grpc.WithTransportCredentials(insecure.NewCredentials())
-			conn, err := grpc.DialContext(context.Background(), "fake", dialer, transportCredentials)
-			require.NoError(t, err)
-
-			defer server.Stop()
-
-			client := workflowservice.NewWorkflowServiceClient(conn)
+			client := getClient(t, rateLimitInterceptor)
 
 			// Generate load by sending a number of requests to the server.
-			for i := 0; i < tc.numRequests; i++ {
-				_, err = client.StartWorkflowExecution(
-					context.Background(),
-					&workflowservice.StartWorkflowExecutionRequest{},
-				)
-				if err != nil {
-					break
-				}
-			}
+			numRequests := tc.numRequests
+			numFailed := sendRequests(t, client, numRequests)
 
 			// Check if the rate limit is hit.
 			if tc.expectRateLimit {
-				assert.ErrorContains(t, err, "rate limit exceeded")
+				assert.Positive(t, numFailed)
 			} else {
-				assert.NoError(t, err)
+				assert.Zero(t, numFailed)
+			}
+		})
+	}
+}
+
+func sendRequests(t *testing.T, client workflowservice.WorkflowServiceClient, numRequests int) int {
+	numFailed := 0
+	for i := 0; i < numRequests; i++ {
+		_, err := client.StartWorkflowExecution(
+			context.Background(),
+			&workflowservice.StartWorkflowExecutionRequest{},
+		)
+		time.Sleep(time.Millisecond)
+		if err != nil {
+			require.ErrorContains(t, err, "rate limit exceeded")
+			numFailed++
+		}
+	}
+	return numFailed
+}
+
+func getClient(t *testing.T, rateLimitInterceptor *interceptor.RateLimitInterceptor) workflowservice.WorkflowServiceClient {
+	// Create a gRPC server for the fake workflow service.
+	svc := &testSvc{}
+	server := grpc.NewServer(grpc.UnaryInterceptor(rateLimitInterceptor.Intercept))
+	workflowservice.RegisterWorkflowServiceServer(server, svc)
+
+	pipe := nettest.NewPipe()
+
+	var wg sync.WaitGroup
+	t.Cleanup(wg.Wait)
+	wg.Add(1)
+
+	listener := nettest.NewListener(pipe)
+	go func() {
+		defer wg.Done()
+
+		_ = server.Serve(listener)
+	}()
+
+	// Create a gRPC client to the fake workflow service.
+	dialer := grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+		return pipe.Connect(ctx.Done())
+	})
+	transportCredentials := grpc.WithTransportCredentials(insecure.NewCredentials())
+	conn, err := grpc.DialContext(context.Background(), "fake", dialer, transportCredentials)
+	require.NoError(t, err)
+
+	t.Cleanup(server.Stop)
+
+	client := workflowservice.NewWorkflowServiceClient(conn)
+	return client
+}
+
+func TestRateLimitInterceptorProvider_UpdatedRate(t *testing.T) {
+	t.Parallel()
+
+	// Create a mock service resolver which returns the number of frontend hosts.
+	// This may be overridden by the test case.
+	ctrl := gomock.NewController(t)
+	serviceResolver := membership.NewMockServiceResolver(ctrl)
+	serviceResolver.EXPECT().MemberCount().Return(1).AnyTimes()
+
+	for _, tc := range []struct {
+		name             string
+		shouldUpdateRate bool
+	}{
+		{
+			name:             "rate limit updated",
+			shouldUpdateRate: true,
+		},
+		{
+			name:             "rate limit not updated",
+			shouldUpdateRate: false,
+		},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rps := 0
+			cfg := &Config{
+				RPS: func() int {
+					return rps
+				},
+				GlobalRPS: func() int {
+					return 0
+				},
+				NamespaceReplicationInducingAPIsRPS: func() int {
+					// this is not used in this test
+					return 0
+				},
+				OperatorRPSRatio: func() float64 {
+					return 0.0
+				},
+			}
+			rateLimitInterceptor := RateLimitInterceptorProvider(cfg, serviceResolver)
+
+			client := getClient(t, rateLimitInterceptor)
+			err := sendRequests(t, client, 10)
+			assert.Equal(t, err, 10)
+			if tc.shouldUpdateRate {
+				rps = 9999999
+				time.Sleep(time.Second)
+			}
+			numFailed := sendRequests(t, client, 10)
+			if tc.shouldUpdateRate {
+				assert.Less(t, numFailed, 10)
+			} else {
+				assert.Equal(t, numFailed, 10)
 			}
 		})
 	}
