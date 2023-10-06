@@ -22,39 +22,30 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
-package persistence
+package api_test
 
 import (
-	"fmt"
+	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.temporal.io/api/serviceerror"
+	"google.golang.org/grpc/codes"
+
+	enumspb "go.temporal.io/server/api/enums/v1"
+	"go.temporal.io/server/service/history/api"
+	"go.temporal.io/server/service/history/tasks"
 )
 
-const (
-	QueueTypeUnspecified   QueueV2Type = 0
-	QueueTypeHistoryNormal QueueV2Type = 1
-	QueueTypeHistoryDLQ    QueueV2Type = 2
+func TestGetDLQTaskCategory(t *testing.T) {
+	t.Parallel()
 
-	// FirstQueueMessageID is the ID of the first message written to a queue partition.
-	FirstQueueMessageID = 0
-)
+	category, err := api.GetDLQTaskCategory(int(tasks.CategoryTransfer.ID()))
+	require.NoError(t, err)
+	assert.Equal(t, int(enumspb.TASK_CATEGORY_TRANSFER), int(category.ID()))
 
-var (
-	ErrInvalidReadQueueMessagesNextPageToken = &InvalidPersistenceRequestError{
-		Msg: "invalid next-page token for reading queue messages",
-	}
-	ErrNonPositiveReadQueueMessagesPageSize = &InvalidPersistenceRequestError{
-		Msg: "non-positive page size for reading queue messages",
-	}
-	ErrInvalidQueueRangeDeleteMaxMessageID = &InvalidPersistenceRequestError{
-		Msg: "max message id for queue range delete is invalid",
-	}
-)
-
-func NewQueueNotFoundError(queueType QueueV2Type, queueName string) error {
-	return serviceerror.NewNotFound(fmt.Sprintf(
-		"queue not found: type = %v and name = %v",
-		queueType,
-		queueName,
-	))
+	_, err = api.GetDLQTaskCategory(-1)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "-1")
+	assert.Equal(t, codes.InvalidArgument, serviceerror.ToStatus(err).Code())
 }

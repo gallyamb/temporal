@@ -36,11 +36,15 @@ import (
 	replicationpb "go.temporal.io/api/replication/v1"
 	"google.golang.org/grpc/metadata"
 
+	"go.temporal.io/server/api/adminservice/v1"
+	"go.temporal.io/server/api/historyservice/v1"
 	"go.temporal.io/server/client/history"
 	"go.temporal.io/server/common/channel"
 	"go.temporal.io/server/common/clock"
 	"go.temporal.io/server/common/primitives"
 	"go.temporal.io/server/common/util"
+	"go.temporal.io/server/service/history/api"
+	"go.temporal.io/server/service/worker/dlq"
 
 	"github.com/pborman/uuid"
 	enumspb "go.temporal.io/api/enums/v1"
@@ -53,10 +57,8 @@ import (
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
-	"go.temporal.io/server/api/adminservice/v1"
 	clusterspb "go.temporal.io/server/api/cluster/v1"
 	enumsspb "go.temporal.io/server/api/enums/v1"
-	"go.temporal.io/server/api/historyservice/v1"
 	persistencespb "go.temporal.io/server/api/persistence/v1"
 	replicationspb "go.temporal.io/server/api/replication/v1"
 	serverClient "go.temporal.io/server/client"
@@ -1765,32 +1767,57 @@ func (adh *AdminHandler) GetDLQTasks(
 	request *adminservice.GetDLQTasksRequest,
 ) (*adminservice.GetDLQTasksResponse, error) {
 	response, err := adh.historyClient.GetDLQTasks(ctx, &historyservice.GetDLQTasksRequest{
-		DlqKey: &historyservice.HistoryDLQKey{
-			Category:      request.DlqKey.Category,
-			SourceCluster: request.DlqKey.SourceCluster,
-			TargetCluster: request.DlqKey.TargetCluster,
-		},
+		DlqKey:        request.DlqKey,
 		PageSize:      request.PageSize,
 		NextPageToken: request.NextPageToken,
 	})
 	if err != nil {
 		return nil, err
 	}
-	dlqTasks := make([]*adminservice.HistoryDLQTask, len(response.DlqTasks))
-	for i, task := range response.DlqTasks {
-		dlqTasks[i] = &adminservice.HistoryDLQTask{
-			Metadata: &adminservice.HistoryDLQTaskMetadata{
-				MessageId: task.Metadata.MessageId,
-			},
-			Task: &adminservice.HistoryTask{
-				ShardId: task.Task.ShardId,
-				Task:    task.Task.Task,
-			},
-		}
-	}
 	return &adminservice.GetDLQTasksResponse{
-		DlqTasks:      dlqTasks,
+		DlqTasks:      response.DlqTasks,
 		NextPageToken: response.NextPageToken,
+	}, nil
+}
+
+func (adh *AdminHandler) PurgeDLQTasks(ctx context.Context, request *adminservice.PurgeDLQTasksRequest) (*adminservice.PurgeDLQTasksResponse, error) {
+	category, err := api.GetDLQTaskCategory(int(request.DlqKey.TaskCategory))
+	if err != nil {
+		return nil, err
+	}
+	sourceCluster := request.DlqKey.SourceCluster
+	if len(sourceCluster) == 0 {
+		return nil, errSourceClusterNotSet
+	}
+	targetCluster := request.DlqKey.TargetCluster
+	if len(targetCluster) == 0 {
+		return nil, errTargetClusterNotSet
+	}
+	key := persistence.QueueKey{
+		QueueType:     persistence.QueueTypeHistoryDLQ,
+		Category:      category,
+		SourceCluster: sourceCluster,
+		TargetCluster: request.DlqKey.TargetCluster,
+	}
+	workflowID := fmt.Sprintf("delete-dlq-tasks-%s", key.GetQueueName())
+	client := adh.sdkClientFactory.GetSystemClient()
+	future, err := client.ExecuteWorkflow(ctx, sdkclient.StartWorkflowOptions{
+		ID:        workflowID,
+		TaskQueue: worker.DefaultWorkerTaskQueue,
+	}, dlq.WorkflowName, dlq.WorkflowParams{
+		WorkflowType: dlq.WorkflowTypeDelete,
+		DeleteParams: dlq.DeleteParams{
+			TaskCategory:  int(category.ID()),
+			SourceCluster: sourceCluster,
+			TargetCluster: targetCluster,
+			MaxMessageID:  request.InclusiveMaxTaskMetadata.MessageId,
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &adminservice.PurgeDLQTasksResponse{
+		JobId: fmt.Sprintf("%s/%s", workflowID, future.GetRunID()),
 	}, nil
 }
 

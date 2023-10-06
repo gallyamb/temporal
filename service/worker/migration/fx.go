@@ -55,34 +55,20 @@ type (
 		MetricsHandler            metrics.Handler
 	}
 
-	fxResult struct {
-		fx.Out
-		Component workercommon.WorkerComponent `group:"workerComponent"`
-	}
-
 	replicationWorkerComponent struct {
 		initParams
 	}
 )
 
-var Module = fx.Options(
-	fx.Provide(NewResult),
-)
+var Module = workercommon.AnnotateWorkerComponentProvider(func(params initParams) workercommon.WorkerComponent {
+	return &replicationWorkerComponent{initParams: params}
+})
 
-func NewResult(params initParams) fxResult {
-	component := &replicationWorkerComponent{
-		initParams: params,
-	}
-	return fxResult{
-		Component: component,
-	}
-}
-
-func (wc *replicationWorkerComponent) Register(worker sdkworker.Worker) {
-	worker.RegisterWorkflowWithOptions(ForceReplicationWorkflow, workflow.RegisterOptions{Name: forceReplicationWorkflowName})
-	worker.RegisterWorkflowWithOptions(NamespaceHandoverWorkflow, workflow.RegisterOptions{Name: namespaceHandoverWorkflowName})
-	worker.RegisterWorkflow(ForceTaskQueueUserDataReplicationWorkflow)
-	worker.RegisterActivity(wc.activities())
+func (wc *replicationWorkerComponent) Register(registry sdkworker.Registry) {
+	registry.RegisterWorkflowWithOptions(ForceReplicationWorkflow, workflow.RegisterOptions{Name: forceReplicationWorkflowName})
+	registry.RegisterWorkflowWithOptions(NamespaceHandoverWorkflow, workflow.RegisterOptions{Name: namespaceHandoverWorkflowName})
+	registry.RegisterWorkflow(ForceTaskQueueUserDataReplicationWorkflow)
+	registry.RegisterActivity(wc.activities())
 }
 
 func (wc *replicationWorkerComponent) DedicatedWorkerOptions() *workercommon.DedicatedWorkerOptions {

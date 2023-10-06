@@ -22,29 +22,22 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
-package api_test
+package api
 
 import (
-	"testing"
+	"fmt"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"go.temporal.io/api/serviceerror"
-	"google.golang.org/grpc/codes"
 
-	enumspb "go.temporal.io/server/api/enums/v1"
-	"go.temporal.io/server/service/history/api"
+	"go.temporal.io/server/service/history/tasks"
 )
 
-func TestGetTaskCategory(t *testing.T) {
-	t.Parallel()
-
-	category, err := api.GetTaskCategory(enumspb.TASK_CATEGORY_TRANSFER)
-	require.NoError(t, err)
-	assert.Equal(t, int(enumspb.TASK_CATEGORY_TRANSFER), int(category.ID()))
-
-	_, err = api.GetTaskCategory(enumspb.TASK_CATEGORY_UNSPECIFIED)
-	require.Error(t, err)
-	assert.ErrorContains(t, err, "Unspecified")
-	assert.Equal(t, codes.InvalidArgument, serviceerror.ToStatus(err).Code())
+func GetDLQTaskCategory(categoryID int) (tasks.Category, error) {
+	category, ok := tasks.GetCategoryByID(int32(categoryID))
+	if !ok {
+		return tasks.Category{}, serviceerror.NewInvalidArgument(
+			fmt.Sprintf("Invalid task category id: %d", categoryID),
+		)
+	}
+	return category, nil
 }

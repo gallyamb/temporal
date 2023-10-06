@@ -34,7 +34,12 @@ import (
 
 	commonpb "go.temporal.io/api/common/v1"
 	namespacepb "go.temporal.io/api/namespace/v1"
-	"go.temporal.io/server/api/enums/v1"
+	"google.golang.org/grpc/codes"
+
+	commonspb "go.temporal.io/server/api/common/v1"
+	"go.temporal.io/server/service/history/tasks"
+	"go.temporal.io/server/service/worker/dlq"
+
 	"google.golang.org/grpc/metadata"
 
 	historyclient "go.temporal.io/server/client/history"
@@ -1156,8 +1161,8 @@ func (s *adminHandlerSuite) TestGetDLQTasks() {
 		s.Run(tc.name, func() {
 			blob := &commonpb.DataBlob{}
 			expectation := s.mockHistoryClient.EXPECT().GetDLQTasks(gomock.Any(), &historyservice.GetDLQTasksRequest{
-				DlqKey: &historyservice.HistoryDLQKey{
-					Category:      enums.TASK_CATEGORY_TRANSFER,
+				DlqKey: &commonspb.HistoryDLQKey{
+					TaskCategory:  tasks.CategoryTransfer.ID(),
 					SourceCluster: "test-source-cluster",
 					TargetCluster: "test-target-cluster",
 				},
@@ -1168,12 +1173,12 @@ func (s *adminHandlerSuite) TestGetDLQTasks() {
 				expectation.Return(nil, tc.err)
 			} else {
 				expectation.Return(&historyservice.GetDLQTasksResponse{
-					DlqTasks: []*historyservice.HistoryDLQTask{
+					DlqTasks: []*commonspb.HistoryDLQTask{
 						{
-							Metadata: &historyservice.HistoryDLQTaskMetadata{
+							Metadata: &commonspb.HistoryDLQTaskMetadata{
 								MessageId: 21,
 							},
-							Task: &historyservice.HistoryTask{
+							Task: &commonspb.HistoryTask{
 								ShardId: 34,
 								Task:    blob,
 							},
@@ -1183,8 +1188,8 @@ func (s *adminHandlerSuite) TestGetDLQTasks() {
 				}, nil)
 			}
 			response, err := s.handler.GetDLQTasks(context.Background(), &adminservice.GetDLQTasksRequest{
-				DlqKey: &adminservice.HistoryDLQKey{
-					Category:      enums.TASK_CATEGORY_TRANSFER,
+				DlqKey: &commonspb.HistoryDLQKey{
+					TaskCategory:  tasks.CategoryTransfer.ID(),
 					SourceCluster: "test-source-cluster",
 					TargetCluster: "test-target-cluster",
 				},
@@ -1197,12 +1202,12 @@ func (s *adminHandlerSuite) TestGetDLQTasks() {
 			}
 			s.NoError(err)
 			s.Equal(&adminservice.GetDLQTasksResponse{
-				DlqTasks: []*adminservice.HistoryDLQTask{
+				DlqTasks: []*commonspb.HistoryDLQTask{
 					{
-						Metadata: &adminservice.HistoryDLQTaskMetadata{
+						Metadata: &commonspb.HistoryDLQTaskMetadata{
 							MessageId: 21,
 						},
-						Task: &adminservice.HistoryTask{
+						Task: &commonspb.HistoryTask{
 							ShardId: 34,
 							Task:    blob,
 						},
@@ -1212,4 +1217,81 @@ func (s *adminHandlerSuite) TestGetDLQTasks() {
 			}, response)
 		})
 	}
+}
+
+func (s *adminHandlerSuite) TestPurgeDLQTasks() {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{
+			name: "success",
+			err:  nil,
+		},
+		{
+			name: "workflow execution failed",
+			err:  serviceerror.NewNotFound("example sdk worfklow start failure"),
+		},
+	} {
+		s.Run(tc.name, func() {
+			mockSdkClient := mocksdk.NewMockClient(s.controller)
+			s.mockResource.SDKClientFactory.EXPECT().GetSystemClient().Return(mockSdkClient)
+			expectation := mockSdkClient.EXPECT().ExecuteWorkflow(
+				gomock.Any(),
+				gomock.Any(),
+				dlq.WorkflowName,
+				dlq.WorkflowParams{
+					WorkflowType: dlq.WorkflowTypeDelete,
+					DeleteParams: dlq.DeleteParams{
+						TaskCategory:  int(tasks.CategoryTransfer.ID()),
+						SourceCluster: "test-source-cluster",
+						TargetCluster: "test-target-cluster",
+						MaxMessageID:  42,
+					},
+				},
+			)
+			if tc.err != nil {
+				expectation.Return(nil, tc.err)
+			} else {
+				run := mocksdk.NewMockWorkflowRun(s.controller)
+				run.EXPECT().GetRunID().Return("test-run-id")
+				expectation.Return(run, nil)
+			}
+			response, err := s.handler.PurgeDLQTasks(context.Background(), &adminservice.PurgeDLQTasksRequest{
+				DlqKey: &commonspb.HistoryDLQKey{
+					TaskCategory:  tasks.CategoryTransfer.ID(),
+					SourceCluster: "test-source-cluster",
+					TargetCluster: "test-target-cluster",
+				},
+				InclusiveMaxTaskMetadata: &commonspb.HistoryDLQTaskMetadata{
+					MessageId: 42,
+				},
+			})
+			if tc.err != nil {
+				s.ErrorIs(err, tc.err)
+				return
+			}
+			s.NoError(err)
+			s.Equal(&adminservice.PurgeDLQTasksResponse{
+				JobId: "delete-dlq-tasks-1_test-source-cluster_test-target-cluster_aG2oua8T/test-run-id",
+			}, response)
+		})
+	}
+}
+
+func (s *adminHandlerSuite) TestPurgeDLQTasks_InvalidCategory() {
+	_, err := s.handler.PurgeDLQTasks(context.Background(), &adminservice.PurgeDLQTasksRequest{
+		DlqKey: &commonspb.HistoryDLQKey{
+			TaskCategory:  -1,
+			SourceCluster: "test-source-cluster",
+			TargetCluster: "test-target-cluster",
+		},
+		InclusiveMaxTaskMetadata: &commonspb.HistoryDLQTaskMetadata{
+			MessageId: 42,
+		},
+	})
+	s.Error(err)
+	s.Equal(codes.InvalidArgument, serviceerror.ToStatus(err).Code())
+	s.ErrorContains(err, "task category")
+	s.ErrorContains(err, "-1")
 }

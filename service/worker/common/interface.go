@@ -28,6 +28,7 @@ package common
 
 import (
 	sdkworker "go.temporal.io/sdk/worker"
+
 	"go.temporal.io/server/common/namespace"
 )
 
@@ -35,7 +36,7 @@ type (
 	// WorkerComponent represents a type of work needed for worker role
 	WorkerComponent interface {
 		// Register registers Workflow and Activity types provided by this worker component.
-		Register(sdkworker.Worker)
+		Register(registry sdkworker.Registry)
 		// DedicatedWorkerOptions returns a DedicatedWorkerOptions for this worker component.
 		// Return nil to use default worker instance.
 		DedicatedWorkerOptions() *DedicatedWorkerOptions
