@@ -265,8 +265,10 @@ func (tm *TaskMatcher) MustOffer(ctx context.Context, task *internalTask, interr
 	if err := tm.rateLimiter.Wait(ctx); err != nil {
 		return err
 	}
-	tm.registerBacklogTask(task)
-	defer tm.unregisterBacklogTask(task)
+	if tm.config.NewForward() {
+		tm.registerBacklogTask(task)
+		defer tm.unregisterBacklogTask(task)
+	}
 	tm.log("spooled task arrived")
 
 	// attempt a match with local poller first. When that
@@ -398,14 +400,17 @@ func (tm *TaskMatcher) poll(
 		taskC = nil
 	}
 
-	tm.pollers.Add(1)
-	defer tm.pollers.Add(-1)
-
+	if tm.config.NewForward() {
+		tm.pollers.Add(1)
+		defer tm.pollers.Add(-1)
+	}
 	tm.log("poller came")
 
 	start := time.Now()
-	defer tm.metricsHandler.Timer(metrics.PollLatencyPerTaskQueue.GetMetricName()).Record(
+	defer func() {
+		tm.metricsHandler.Timer(metrics.PollLatencyPerTaskQueue.GetMetricName()).Record(
 		time.Since(start), metrics.StringTag("duplicate", strconv.FormatBool(f)))
+	}()
 	// We want to effectively do a prioritized select, but Go select is random
 	// if multiple cases are ready, so split into multiple selects.
 	// The priority order is:
@@ -568,7 +573,7 @@ func (tm *TaskMatcher) log(msg string, args ...any) {
 		return
 	}
 	fmt.Printf("%s %s (%d) \t", time.Now().Format("15:04:05.999"), tm.name(), tm.pollers.Load())
-	fmt.Printf(msg+" ["+tm.getBacklogAge().String()+"] \n", args...)
+	fmt.Printf(msg+"\n", args...)
 }
 
 func (tm *TaskMatcher) name() any {
