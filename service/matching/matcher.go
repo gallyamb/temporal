@@ -28,12 +28,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"go.temporal.io/api/enums/v1"
 	"math"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"go.temporal.io/api/enums/v1"
 
 	enumsspb "go.temporal.io/server/api/enums/v1"
 	"go.temporal.io/server/api/matchingservice/v1"
@@ -214,6 +216,7 @@ func (tm *TaskMatcher) offerOrTimeout(ctx context.Context, task *internalTask) (
 		}
 		return false, nil
 	case <-ctx.Done():
+		tm.log("remote sync match timeout")
 		return false, nil
 	}
 }
@@ -279,6 +282,9 @@ func (tm *TaskMatcher) MustOffer(ctx context.Context, task *internalTask, interr
 	default:
 	}
 
+//innerCtx, innerCancel := context.WithTimeout(ctx, time.Second*1)
+//defer func() {innerCancel()}()
+
 forLoop:
 	for {
 		select {
@@ -328,6 +334,9 @@ forLoop:
 			return nil
 		case <-ctx.Done():
 			return ctx.Err()
+		//case <- innerCtx.Done():
+		//	innerCtx, innerCancel = context.WithTimeout(ctx, time.Second*1)
+		//	continue forLoop
 		case <-interruptCh:
 			return errInterrupted
 		}
@@ -449,7 +458,7 @@ func (tm *TaskMatcher) poll(
 		tm.metricsHandler.Counter(metrics.PollSuccessPerTaskQueueCounter.GetMetricName()).Record(1)
 		return task, false, nil
 	case token := <-tm.fwdrPollReqTokenC():
-		tm.log("Forwarding with backlog Age: %s len of tackC: %d", tm.getBacklogAge(), len(taskC))
+		tm.log("Forwarding Poll with backlog Age: %s len of tackC: %d", tm.getBacklogAge(), len(taskC))
 		if task, err := tm.fwdr.ForwardPoll(ctx, pollMetadata); err == nil {
 			token.release()
 			tm.log("polled remote")
@@ -481,6 +490,13 @@ func (tm *TaskMatcher) fwdrPollReqTokenC() <-chan *ForwarderReqToken {
 	if tm.fwdr == nil {
 		return nil
 	}
+
+	ba := tm.getBacklogAge()
+	if tm.config.NewForward() && ba != NO_BACKLOG {
+		return nil
+	}
+
+	tm.log("Allowing Poll forwarding with backlog Age: %s len of tackC: %d", ba, len(tm.taskC))
 	return tm.fwdr.PollReqTokenC()
 }
 
@@ -488,6 +504,14 @@ func (tm *TaskMatcher) fwdrAddReqTokenC() <-chan *ForwarderReqToken {
 	if tm.fwdr == nil {
 		return nil
 	}
+
+	ba := tm.getBacklogAge()
+	if tm.config.NewForward() && ba != NO_BACKLOG {
+		tm.log("Rejected Task forwarding with backlog Age: %s len of tackC: %d", ba, len(tm.taskC))
+		return nil
+	}
+
+	tm.log("Allowing Task forwarding with backlog Age: %s len of tackC: %d", ba, len(tm.taskC))
 	return tm.fwdr.AddReqTokenC()
 }
 
@@ -499,6 +523,8 @@ func (tm *TaskMatcher) registerBacklogTask(task *internalTask) {
 	tm.backlogTasksLock.Lock()
 	defer tm.backlogTasksLock.Unlock()
 
+	tm.log("registering")
+
 	ts := task.event.Data.CreateTime.UnixNano()
 	tm.backlogTasksCreateTime[ts] += 1
 }
@@ -507,6 +533,7 @@ func (tm *TaskMatcher) unregisterBacklogTask(task *internalTask) {
 	tm.backlogTasksLock.Lock()
 	defer tm.backlogTasksLock.Unlock()
 
+	tm.log("unregistering")
 	ts := task.event.Data.CreateTime.UnixNano()
 	counter := tm.backlogTasksCreateTime[ts]
 	if counter == 1 {
@@ -516,12 +543,14 @@ func (tm *TaskMatcher) unregisterBacklogTask(task *internalTask) {
 	}
 }
 
+const NO_BACKLOG time.Duration = -1
+
 func (tm *TaskMatcher) getBacklogAge() time.Duration {
 	tm.backlogTasksLock.RLock()
 	defer tm.backlogTasksLock.RUnlock()
 
 	if len(tm.backlogTasksCreateTime) == 0 {
-		return -1
+		return NO_BACKLOG
 	}
 	//fmt.Printf("backlog len: %d\n", len(tm.backlogTasksCreateTime))
 	oldest := int64(math.MaxInt64)
@@ -535,16 +564,16 @@ func (tm *TaskMatcher) getBacklogAge() time.Duration {
 }
 
 func (tm *TaskMatcher) log(msg string, args ...any) {
-	if tm.taskqueue.taskType != enums.TASK_QUEUE_TYPE_ACTIVITY {
+	if tm.taskqueue.taskType != enums.TASK_QUEUE_TYPE_ACTIVITY  || strings.HasPrefix(tm.taskqueue.Name.BaseNameString(), "temporal") {
 		return
 	}
 	fmt.Printf("%s %s (%d) \t", time.Now().Format("15:04:05.999"), tm.name(), tm.pollers.Load())
-	fmt.Printf(msg+"\n", args...)
+	fmt.Printf(msg+" ["+tm.getBacklogAge().String()+"] \n", args...)
 }
 
 func (tm *TaskMatcher) name() any {
 	if tm.fwdr == nil {
 		return "[ROOT]"
 	}
-	return "[CHILD]"
+	return fmt.Sprintf("[P%d]",tm.taskqueue.Partition())
 }

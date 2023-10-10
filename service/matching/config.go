@@ -67,6 +67,7 @@ type (
 		VersionBuildIdLimitPerQueue       dynamicconfig.IntPropertyFnWithNamespaceFilter
 		TaskQueueLimitPerBuildId          dynamicconfig.IntPropertyFnWithNamespaceFilter
 		GetUserDataLongPollTimeout        dynamicconfig.DurationPropertyFn
+		NewForward                        dynamicconfig.BoolPropertyFnWithTaskQueueInfoFilters
 
 		// Time to hold a poll request before returning an empty response if there are no tasks
 		LongPollExpirationInterval dynamicconfig.DurationPropertyFnWithTaskQueueInfoFilters
@@ -96,6 +97,7 @@ type (
 		ForwarderMaxOutstandingTasks func() int
 		ForwarderMaxRatePerSecond    func() int
 		ForwarderMaxChildrenPerNode  func() int
+		NewForward                   func() bool
 	}
 
 	taskQueueConfig struct {
@@ -188,6 +190,7 @@ func NewConfig(
 		VersionBuildIdLimitPerQueue:           dc.GetIntPropertyFilteredByNamespace(dynamicconfig.VersionBuildIdLimitPerQueue, 100),
 		TaskQueueLimitPerBuildId:              dc.GetIntPropertyFilteredByNamespace(dynamicconfig.TaskQueuesPerBuildIdLimit, 20),
 		GetUserDataLongPollTimeout:            dc.GetDurationProperty(dynamicconfig.MatchingGetUserDataLongPollTimeout, 5*time.Minute),
+		NewForward:                            dc.GetBoolPropertyFilteredByTaskQueueInfo(dynamicconfig.MatchingNewForward, false),
 
 		AdminNamespaceToPartitionDispatchRate:          dc.GetFloatPropertyFilteredByNamespace(dynamicconfig.AdminMatchingNamespaceToPartitionDispatchRate, 10000),
 		AdminNamespaceTaskqueueToPartitionDispatchRate: dc.GetFloatPropertyFilteredByTaskQueueInfo(dynamicconfig.AdminMatchingNamespaceTaskqueueToPartitionDispatchRate, 1000),
@@ -263,6 +266,9 @@ func newTaskQueueConfig(id *taskQueueID, config *Config, namespace namespace.Nam
 			},
 			ForwarderMaxChildrenPerNode: func() int {
 				return max(1, config.ForwarderMaxChildrenPerNode(namespace.String(), taskQueueName, taskType))
+			},
+			NewForward: func() bool {
+				return config.NewForward(namespace.String(), taskQueueName, taskType)
 			},
 		},
 		GetUserDataRetryPolicy: backoff.NewExponentialRetryPolicy(1 * time.Second).WithMaximumInterval(5 * time.Minute),

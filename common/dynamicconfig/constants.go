@@ -461,6 +461,7 @@ const (
 	MatchingShutdownDrainDuration = "matching.shutdownDrainDuration"
 	// MatchingGetUserDataLongPollTimeout is the max length of long polls for GetUserData calls between partitions.
 	MatchingGetUserDataLongPollTimeout = "matching.getUserDataLongPollTimeout"
+	MatchingNewForward = "matching.newForward"
 
 	// for matching testing only:
 

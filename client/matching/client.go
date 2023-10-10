@@ -56,6 +56,7 @@ type clientImpl struct {
 	longPollTimeout time.Duration
 	clients         common.ClientCache
 	loadBalancer    LoadBalancer
+	partitionFinder *TaskQueuePartitionFinder
 }
 
 // NewClient creates a new history service gRPC client
@@ -64,12 +65,14 @@ func NewClient(
 	longPollTimeout time.Duration,
 	clients common.ClientCache,
 	lb LoadBalancer,
+	partitionFinder *TaskQueuePartitionFinder,
 ) matchingservice.MatchingServiceClient {
 	return &clientImpl{
 		timeout:         timeout,
 		longPollTimeout: longPollTimeout,
 		clients:         clients,
 		loadBalancer:    lb,
+		partitionFinder: partitionFinder,
 	}
 }
 
@@ -125,13 +128,10 @@ func (c *clientImpl) PollActivityTaskQueue(
 	ctx context.Context,
 	request *matchingservice.PollActivityTaskQueueRequest,
 	opts ...grpc.CallOption) (*matchingservice.PollActivityTaskQueueResponse, error) {
-	partition := c.loadBalancer.PickReadPartition(
-		namespace.ID(request.GetNamespaceId()),
-		*request.PollRequest.GetTaskQueue(),
-		enumspb.TASK_QUEUE_TYPE_ACTIVITY,
-		request.GetForwardedSource(),
-	)
-	request.PollRequest.TaskQueue.Name = partition
+	pollerToken := c.partitionFinder.PickReadPartition(request.NamespaceId, *request.PollRequest.TaskQueue,
+		enumspb.TASK_QUEUE_TYPE_ACTIVITY, request.ForwardedSource)
+	defer pollerToken.Release()
+	request.PollRequest.TaskQueue.Name = pollerToken.GetFullName()
 	client, err := c.getClientForTaskqueue(
 		request.NamespaceId,
 		request.PollRequest.TaskQueue,
@@ -149,13 +149,10 @@ func (c *clientImpl) PollWorkflowTaskQueue(
 	ctx context.Context,
 	request *matchingservice.PollWorkflowTaskQueueRequest,
 	opts ...grpc.CallOption) (*matchingservice.PollWorkflowTaskQueueResponse, error) {
-	partition := c.loadBalancer.PickReadPartition(
-		namespace.ID(request.GetNamespaceId()),
-		*request.PollRequest.GetTaskQueue(),
-		enumspb.TASK_QUEUE_TYPE_WORKFLOW,
-		request.GetForwardedSource(),
-	)
-	request.PollRequest.TaskQueue.Name = partition
+	pollerToken := c.partitionFinder.PickReadPartition(request.NamespaceId, *request.PollRequest.TaskQueue,
+		enumspb.TASK_QUEUE_TYPE_WORKFLOW, request.ForwardedSource)
+	defer pollerToken.Release()
+	request.PollRequest.TaskQueue.Name = pollerToken.GetFullName()
 	client, err := c.getClientForTaskqueue(
 		request.NamespaceId,
 		request.PollRequest.TaskQueue,

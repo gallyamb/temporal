@@ -159,6 +159,10 @@ func (cf *rpcClientFactory) NewMatchingClientWithTimeout(
 		longPollTimeout,
 		common.NewClientCache(keyResolver, clientProvider),
 		matching.NewLoadBalancer(namespaceIDToName, cf.dynConfig),
+		matching.NewTaskQueuePartitionFinder(
+			cf.dynConfig.GetTaskQueuePartitionsProperty(dynamicconfig.MatchingNumTaskqueueReadPartitions),
+		namespaceIDToName,
+	),
 	)
 
 	if cf.metricsHandler != nil {
