@@ -92,7 +92,7 @@ func (f *TaskQueuePartitionFinder) PickReadPartition(
 	taskQueueType enumspb.TaskQueueType,
 	forwardedFrom string,
 ) *pollToken {
-	if forwardedFrom != "" || taskQueue.Kind == enumspb.TASK_QUEUE_KIND_STICKY {
+	if taskQueue.Kind == enumspb.TASK_QUEUE_KIND_STICKY {
 		// no partition for sticky task queue and forwarded request
 		return &pollToken{fullName: taskQueue.GetName()}
 	}
@@ -113,18 +113,24 @@ func (f *TaskQueuePartitionFinder) PickReadPartition(
 	}
 	f.lock.Unlock()
 
+	if forwardedFrom != "" {
+		return loadBalancer.PickReadPartition(1, false)
+	}
+
 	partitionCount := f.GetReadPartitionCount(namespaceID, parsedName.BaseNameString(), taskQueueType)
-	return loadBalancer.PickReadPartition(partitionCount)
+	return loadBalancer.PickReadPartition(partitionCount, true)
 }
 
 // PickReadPartition picks a partition for poller to poll task from, and keeps load balanced between partitions.
 // Caller is responsible to call pollToken.Release() after complete the poll.
-func (b *loadBalancer) PickReadPartition(partitionCount int32) *pollToken {
+func (b *loadBalancer) PickReadPartition(partitionCount int32, refreshConfig bool) *pollToken {
 	b.lock.Lock()
 	defer b.lock.Unlock()
 
-	// ensure we reflect dynamic config change if it ever happens
-	b.ensurePartitionCountLocked(partitionCount)
+	if(refreshConfig) {
+		// ensure we reflect dynamic config change if it ever happens
+		b.ensurePartitionCountLocked(partitionCount)
+	}
 
 	// pick a random partition to start with
 	startPartitionID := rand.Intn(int(partitionCount))

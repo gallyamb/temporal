@@ -58,10 +58,10 @@ frontend.accessHistoryFraction:
 #  - value: 0
 #    constraints:
 #      namespace: backlog_exp
-#matching.forwarderMaxOutstandingPolls:
-#  - value: 1
-#    constraints:
-#     namespace: backlog_exp
+matching.forwarderMaxOutstandingPolls:
+  - value: 2
+    constraints:
+     namespace: backlog_exp
 #matching.newForward:
 #  - value: true
 #    constraints:
