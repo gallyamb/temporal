@@ -68,6 +68,7 @@ func TestInvoke(t *testing.T, manager persistence.HistoryTaskQueueManager) {
 	res, err := getdlqtasks.Invoke(
 		context.Background(),
 		manager,
+		tasks.NewDefaultTaskCategoryRegistry(),
 		&historyservice.GetDLQTasksRequest{
 			DlqKey: &historyservice.HistoryDLQKey{
 				Category:      enumsspb.TASK_CATEGORY_TRANSFER,

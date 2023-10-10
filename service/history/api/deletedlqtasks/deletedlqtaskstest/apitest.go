@@ -69,7 +69,7 @@ func TestInvoke(t *testing.T, manager persistence.HistoryTaskQueueManager) {
 			InclusiveMaxTaskMetadata: &historyservice.HistoryDLQTaskMetadata{
 				MessageId: persistence.FirstQueueMessageID + 1,
 			},
-		})
+		}, tasks.NewDefaultTaskCategoryRegistry())
 		require.NoError(t, err)
 		resp, err := manager.ReadRawTasks(ctx, &persistence.ReadRawTasksRequest{
 			QueueKey: queueKey,
@@ -92,7 +92,7 @@ func TestInvoke(t *testing.T, manager persistence.HistoryTaskQueueManager) {
 			InclusiveMaxTaskMetadata: &historyservice.HistoryDLQTaskMetadata{
 				MessageId: persistence.FirstQueueMessageID,
 			},
-		})
+		}, tasks.NewDefaultTaskCategoryRegistry())
 		require.Error(t, err)
 		assert.Equal(t, codes.NotFound, serviceerror.ToStatus(err).Code(), err.Error())
 	})

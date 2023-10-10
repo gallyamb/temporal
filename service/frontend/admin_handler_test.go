@@ -34,7 +34,10 @@ import (
 
 	commonpb "go.temporal.io/api/common/v1"
 	namespacepb "go.temporal.io/api/namespace/v1"
+
 	"go.temporal.io/server/api/enums/v1"
+	"go.temporal.io/server/service/history/tasks"
+
 	"google.golang.org/grpc/metadata"
 
 	historyclient "go.temporal.io/server/client/history"
@@ -167,6 +170,7 @@ func (s *adminHandlerSuite) SetupTest() {
 		serialization.NewSerializer(),
 		clock.NewRealTimeSource(),
 		s.mockResource.GetExecutionManager(),
+		tasks.NewDefaultTaskCategoryRegistry(),
 	}
 	s.mockMetadata.EXPECT().GetCurrentClusterName().Return(uuid.New()).AnyTimes()
 	s.handler = NewAdminHandler(args)

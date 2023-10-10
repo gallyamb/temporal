@@ -7034,9 +7034,10 @@ func (m *AddTasksRequest) GetTasks() []*AddTasksRequest_Task {
 }
 
 type AddTasksRequest_Task struct {
-	// category is needed to deserialize the tasks. Examples include "transfer", "timer", etc. See the history/tasks
-	// package for a definitive list. Warning: this is not the same as the stringified value of a TaskCategory enum.
-	Category string `protobuf:"bytes,1,opt,name=category,proto3" json:"category,omitempty"`
+	// category is needed to deserialize the tasks. See TaskCategory for a list of options here. However, keep in mind
+	// that the list of valid options is registered dynamically with the server in the history/tasks package, so that
+	// enum is not comprehensive.
+	Category int32 `protobuf:"varint,1,opt,name=category,proto3" json:"category,omitempty"`
 	// blob is the serialized task.
 	Blob *v14.DataBlob `protobuf:"bytes,2,opt,name=blob,proto3" json:"blob,omitempty"`
 }
@@ -7073,11 +7074,11 @@ func (m *AddTasksRequest_Task) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_AddTasksRequest_Task proto.InternalMessageInfo
 
-func (m *AddTasksRequest_Task) GetCategory() string {
+func (m *AddTasksRequest_Task) GetCategory() int32 {
 	if m != nil {
 		return m.Category
 	}
-	return ""
+	return 0
 }
 
 func (m *AddTasksRequest_Task) GetBlob() *v14.DataBlob {
@@ -7591,14 +7592,14 @@ var fileDescriptor_b8c78c1d460a3711 = []byte{
 	0xc4, 0x81, 0x6b, 0x05, 0xa9, 0xc3, 0xb0, 0x02, 0x2f, 0xe3, 0x7f, 0x47, 0xdd, 0xf3, 0xf7, 0x48,
 	0x15, 0x98, 0x0a, 0xaf, 0x92, 0xb9, 0x8d, 0x7f, 0x10, 0xa0, 0x78, 0x55, 0xd3, 0x02, 0x4b, 0x4f,
 	0xf0, 0x1d, 0x77, 0x21, 0xeb, 0xbf, 0xe2, 0xfa, 0x52, 0x8f, 0x04, 0x87, 0x66, 0x20, 0xa6, 0x21,
-	0x53, 0x4c, 0x33, 0x6f, 0x40, 0x86, 0x38, 0x85, 0x99, 0x90, 0x7d, 0xe5, 0x7d, 0x36, 0xf3, 0x2c,
+	0x53, 0x4c, 0x33, 0x6f, 0x40, 0x86, 0x38, 0x85, 0x99, 0x90, 0x7d, 0x65, 0x7d, 0x36, 0xf3, 0x2c,
 	0x64, 0xd6, 0x1b, 0xe6, 0x7a, 0xef, 0x2e, 0x0b, 0x8f, 0x96, 0x44, 0x28, 0x79, 0x13, 0xb3, 0x5f,
 	0xed, 0x69, 0x7d, 0xf8, 0x71, 0xf5, 0xc8, 0x47, 0x1f, 0x57, 0x8f, 0x7c, 0xfa, 0x71, 0x55, 0xf8,
 	0xb5, 0x87, 0x55, 0xe1, 0x83, 0x87, 0x55, 0xe1, 0xaf, 0x1f, 0x56, 0x85, 0x0f, 0x1f, 0x56, 0x85,
 	0x7f, 0x7b, 0x58, 0x15, 0x7e, 0xfa, 0xb0, 0x7a, 0xe4, 0xd3, 0x87, 0x55, 0xe1, 0xbd, 0x4f, 0xaa,
 	0x47, 0x3e, 0xfc, 0xa4, 0x7a, 0xe4, 0xa3, 0x4f, 0xaa, 0x47, 0xbe, 0xfe, 0xc2, 0xa6, 0xe9, 0xcd,
 	0xa9, 0x9b, 0x89, 0xff, 0x4c, 0xe8, 0x4b, 0xc1, 0x96, 0xf5, 0x21, 0x72, 0x24, 0xbd, 0xfc, 0x7f,
-	0x01, 0x00, 0x00, 0xff, 0xff, 0x95, 0x2f, 0xab, 0x6a, 0x8b, 0x68, 0x00, 0x00,
+	0x01, 0x00, 0x00, 0xff, 0xff, 0xcb, 0x5b, 0x42, 0xdb, 0x8b, 0x68, 0x00, 0x00,
 }
 
 func (this *StartWorkflowExecutionRequest) Equal(that interface{}) bool {
@@ -19022,12 +19023,10 @@ func (m *AddTasksRequest_Task) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i--
 		dAtA[i] = 0x12
 	}
-	if len(m.Category) > 0 {
-		i -= len(m.Category)
-		copy(dAtA[i:], m.Category)
-		i = encodeVarintRequestResponse(dAtA, i, uint64(len(m.Category)))
+	if m.Category != 0 {
+		i = encodeVarintRequestResponse(dAtA, i, uint64(m.Category))
 		i--
-		dAtA[i] = 0xa
+		dAtA[i] = 0x8
 	}
 	return len(dAtA) - i, nil
 }
@@ -21451,9 +21450,8 @@ func (m *AddTasksRequest_Task) Size() (n int) {
 	}
 	var l int
 	_ = l
-	l = len(m.Category)
-	if l > 0 {
-		n += 1 + l + sovRequestResponse(uint64(l))
+	if m.Category != 0 {
+		n += 1 + sovRequestResponse(uint64(m.Category))
 	}
 	if m.Blob != nil {
 		l = m.Blob.Size()
@@ -39685,10 +39683,10 @@ func (m *AddTasksRequest_Task) Unmarshal(dAtA []byte) error {
 		}
 		switch fieldNum {
 		case 1:
-			if wireType != 2 {
+			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field Category", wireType)
 			}
-			var stringLen uint64
+			m.Category = 0
 			for shift := uint(0); ; shift += 7 {
 				if shift >= 64 {
 					return ErrIntOverflowRequestResponse
@@ -39698,24 +39696,11 @@ func (m *AddTasksRequest_Task) Unmarshal(dAtA []byte) error {
 				}
 				b := dAtA[iNdEx]
 				iNdEx++
-				stringLen |= uint64(b&0x7F) << shift
+				m.Category |= int32(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}
 			}
-			intStringLen := int(stringLen)
-			if intStringLen < 0 {
-				return ErrInvalidLengthRequestResponse
-			}
-			postIndex := iNdEx + intStringLen
-			if postIndex < 0 {
-				return ErrInvalidLengthRequestResponse
-			}
-			if postIndex > l {
-				return io.ErrUnexpectedEOF
-			}
-			m.Category = string(dAtA[iNdEx:postIndex])
-			iNdEx = postIndex
 		case 2:
 			if wireType != 2 {
 				return fmt.Errorf("proto: wrong wireType = %d for field Blob", wireType)

@@ -223,7 +223,7 @@ func (s *addTasksSuite) TestAddTasks_Ok() {
 				ShardId: int32(shardID),
 				Tasks: []*historyservice.AddTasksRequest_Task{
 					{
-						Category: task.GetCategory().Name(),
+						Category: int32(task.GetCategory().ID()),
 						Blob:     &blob,
 					},
 				},

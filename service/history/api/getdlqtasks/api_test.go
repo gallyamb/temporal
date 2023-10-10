@@ -46,19 +46,24 @@ type failingHistoryTaskQueueManager struct {
 	persistence.HistoryTaskQueueManager
 }
 
-func TestInvoke_InvalidQueueCategory(t *testing.T) {
+func TestInvoke_InvalidTaskCategory(t *testing.T) {
 	t.Parallel()
 
-	_, err := getdlqtasks.Invoke(context.Background(), nil, &historyservice.GetDLQTasksRequest{
-		DlqKey: &historyservice.HistoryDLQKey{
-			Category: -1,
+	_, err := getdlqtasks.Invoke(
+		context.Background(),
+		nil,
+		tasks.NewDefaultTaskCategoryRegistry(),
+		&historyservice.GetDLQTasksRequest{
+			DlqKey: &historyservice.HistoryDLQKey{
+				Category: -1,
+			},
 		},
-	})
+	)
 
 	var invalidArgErr *serviceerror.InvalidArgument
 
 	require.ErrorAs(t, err, &invalidArgErr)
-	assert.ErrorContains(t, invalidArgErr, "Invalid queue category")
+	assert.ErrorContains(t, invalidArgErr, "Invalid task category")
 	assert.ErrorContains(t, invalidArgErr, "-1")
 }
 
@@ -68,6 +73,7 @@ func TestInvoke_ZeroPageSize(t *testing.T) {
 	_, err := getdlqtasks.Invoke(
 		context.Background(),
 		new(persistence.HistoryTaskQueueManagerImpl),
+		tasks.NewDefaultTaskCategoryRegistry(),
 		&historyservice.GetDLQTasksRequest{
 			DlqKey: &historyservice.HistoryDLQKey{
 				Category: enumsspb.TaskCategory(tasks.CategoryTransfer.ID()),
@@ -85,6 +91,7 @@ func TestInvoke_UnavailableError(t *testing.T) {
 	_, err := getdlqtasks.Invoke(
 		context.Background(),
 		failingHistoryTaskQueueManager{},
+		tasks.NewDefaultTaskCategoryRegistry(),
 		&historyservice.GetDLQTasksRequest{
 			DlqKey: &historyservice.HistoryDLQKey{
 				Category: enumsspb.TaskCategory(tasks.CategoryTransfer.ID()),
