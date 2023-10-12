@@ -27,15 +27,11 @@ package matching
 import (
 	"context"
 	"errors"
-	"fmt"
 	"math"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"go.temporal.io/api/enums/v1"
 
 	enumsspb "go.temporal.io/server/api/enums/v1"
 	"go.temporal.io/server/api/matchingservice/v1"
@@ -73,12 +69,13 @@ type TaskMatcher struct {
 	backlogTasksCreateTime map[int64]int
 	backlogTasksLock       sync.RWMutex
 	taskqueue              *taskQueueID
-	pollers                atomic.Int32
+	lastPoller             atomic.Int64
 }
 
 const (
-	defaultTaskDispatchRPS    = 100000.0
-	defaultTaskDispatchRPSTTL = time.Minute
+	defaultTaskDispatchRPS                  = 100000.0
+	defaultTaskDispatchRPSTTL               = time.Minute
+	emptyBacklogAge           time.Duration = -1
 )
 
 var (
@@ -158,6 +155,10 @@ func (tm *TaskMatcher) Offer(ctx context.Context, task *internalTask) (bool, err
 		}
 	}
 
+	if !tm.isBacklogNegligible() {
+		return false, nil
+	}
+
 	select {
 	case tm.taskC <- task: // poller picked up the task
 		if task.responseC != nil {
@@ -165,7 +166,6 @@ func (tm *TaskMatcher) Offer(ctx context.Context, task *internalTask) (bool, err
 			// and return error if the response contains error
 			err := <-task.responseC
 
-			tm.log("sync match ready poller")
 			if err == nil && !task.isForwarded() {
 				mh := tm.metricsHandler.WithTags(metrics.StringTag("source", enumsspb.TASK_SOURCE_HISTORY.String()), metrics.StringTag("forwarded", "false"))
 				mh.Timer(metrics.TaskDispatchLatencyPerTaskQueue.GetMetricName()).Record(time.Since(*task.event.Data.CreateTime))
@@ -178,9 +178,7 @@ func (tm *TaskMatcher) Offer(ctx context.Context, task *internalTask) (bool, err
 		// root partition if possible
 		select {
 		case token := <-tm.fwdrAddReqTokenC():
-			tm.log("sync match forward")
 			if err := tm.fwdr.ForwardTask(ctx, task); err == nil {
-				tm.log("sync match matched remotely")
 				// task was remotely sync matched on the parent partition
 				token.release()
 				mh := tm.metricsHandler.WithTags(metrics.StringTag("source", enumsspb.TASK_SOURCE_HISTORY.String()), metrics.StringTag("forwarded", "true"))
@@ -208,7 +206,6 @@ func (tm *TaskMatcher) offerOrTimeout(ctx context.Context, task *internalTask) (
 		if task.responseC != nil {
 			select {
 			case err := <-task.responseC:
-				tm.log("remote sync match success")
 				return true, err
 			case <-ctx.Done():
 				return false, nil
@@ -216,7 +213,6 @@ func (tm *TaskMatcher) offerOrTimeout(ctx context.Context, task *internalTask) (
 		}
 		return false, nil
 	case <-ctx.Done():
-		tm.log("remote sync match timeout")
 		return false, nil
 	}
 }
@@ -265,17 +261,14 @@ func (tm *TaskMatcher) MustOffer(ctx context.Context, task *internalTask, interr
 	if err := tm.rateLimiter.Wait(ctx); err != nil {
 		return err
 	}
-	if tm.config.NewForward() {
-		tm.registerBacklogTask(task)
-		defer tm.unregisterBacklogTask(task)
-	}
-	tm.log("spooled task arrived")
+
+	tm.registerBacklogTask(task)
+	defer tm.unregisterBacklogTask(task)
 
 	// attempt a match with local poller first. When that
 	// doesn't succeed, try both local match and remote match
 	select {
 	case tm.taskC <- task:
-		tm.log("must offer ready")
 		mh := tm.metricsHandler.WithTags(metrics.StringTag("source", task.source.String()), metrics.StringTag("forwarded", "false"))
 		mh.Timer(metrics.TaskDispatchLatencyPerTaskQueue.GetMetricName()).Record(time.Since(*task.event.Data.CreateTime))
 		return nil
@@ -284,24 +277,48 @@ func (tm *TaskMatcher) MustOffer(ctx context.Context, task *internalTask, interr
 	default:
 	}
 
-//innerCtx, innerCancel := context.WithTimeout(ctx, time.Second*1)
-//defer func() {innerCancel()}()
+	reconsiderFwdTimer := (*time.Timer)(nil)
+	defer func() {
+		if reconsiderFwdTimer != nil {
+			reconsiderFwdTimer.Stop()
+		}
+	}()
 
 forLoop:
 	for {
+		fwdTokenC := tm.fwdrAddReqTokenC()
+		reconsiderFwdTimer = (*time.Timer)(nil)
+		reconsiderFwdTimerC := (<-chan time.Time)(nil)
+		if fwdTokenC != nil && !tm.isBacklogNegligible() {
+			// If there is a non-negligible backlog, we stop forwarding to make sure
+			// root and leaf partitions are treated equally and can process their
+			// backlog at the same rate. Stopping task forwarding, prevent poll
+			// forwarding as well (in presence of a backlog). This ensures all partitions
+			// receive polls and tasks at the same rate.
+			// Exception: we allow forward if this partition has not got any polls
+			// recently. This is helpful when there are very few pollers and they
+			// and they are all stuck in the wrong (root) partition. (Note that since
+			// frontend balanced the number of pending pollers per partition this only
+			// becomes an issue when the pollers are fewer than the partitions)
+			lp := time.Since(time.Unix(0, tm.lastPoller.Load()))
+			maxWaitForLocalPoller := tm.config.MaxWaitForPollerBeforeFwd()
+			if lp < maxWaitForLocalPoller {
+				fwdTokenC = nil
+				reconsiderFwdTimer = time.NewTimer(maxWaitForLocalPoller - lp)
+				reconsiderFwdTimerC = reconsiderFwdTimer.C
+			}
+		}
+
 		select {
 		case tm.taskC <- task:
-			tm.log("must offer middle")
 			mh := tm.metricsHandler.WithTags(metrics.StringTag("source", task.source.String()), metrics.StringTag("forwarded", "false"))
 			mh.Timer(metrics.TaskDispatchLatencyPerTaskQueue.GetMetricName()).Record(time.Since(*task.event.Data.CreateTime))
 			return nil
-		case token := <-tm.fwdrAddReqTokenC():
-			tm.log("must offer forwarding")
+		case token := <-fwdTokenC:
 			childCtx, cancel := context.WithTimeout(ctx, time.Second*2)
 			err := tm.fwdr.ForwardTask(childCtx, task)
 			token.release()
 			if err != nil {
-				tm.log("must offer forward error")
 				tm.metricsHandler.Counter(metrics.ForwardTaskErrorsPerTaskQueue.GetMetricName()).Record(1)
 				// forwarder returns error only when the call is rate limited. To
 				// avoid a busy loop on such rate limiting events, we only attempt to make
@@ -309,7 +326,6 @@ forLoop:
 				// hoping for a local poller match
 				select {
 				case tm.taskC <- task:
-					tm.log("must offer local match within forward")
 					cancel()
 					mh := tm.metricsHandler.WithTags(metrics.StringTag("source", task.source.String()), metrics.StringTag("forwarded", "false"))
 					mh.Timer(metrics.TaskDispatchLatencyPerTaskQueue.GetMetricName()).Record(time.Since(*task.event.Data.CreateTime))
@@ -325,7 +341,6 @@ forLoop:
 				cancel()
 				continue forLoop
 			}
-			tm.log("must offer matched remotely")
 			cancel()
 			// at this point, we forwarded the task to a parent partition which
 			// in turn dispatched the task to a poller. Make sure we delete the
@@ -336,9 +351,8 @@ forLoop:
 			return nil
 		case <-ctx.Done():
 			return ctx.Err()
-		//case <- innerCtx.Done():
-		//	innerCtx, innerCancel = context.WithTimeout(ctx, time.Second*1)
-		//	continue forLoop
+		case <-reconsiderFwdTimerC:
+			continue forLoop
 		case <-interruptCh:
 			return errInterrupted
 		}
@@ -400,16 +414,12 @@ func (tm *TaskMatcher) poll(
 		taskC = nil
 	}
 
-	if tm.config.NewForward() {
-		tm.pollers.Add(1)
-		defer tm.pollers.Add(-1)
-	}
-	tm.log("poller came")
-
 	start := time.Now()
+	tm.lastPoller.Store(start.UnixNano())
+
 	defer func() {
 		tm.metricsHandler.Timer(metrics.PollLatencyPerTaskQueue.GetMetricName()).Record(
-		time.Since(start), metrics.StringTag("duplicate", strconv.FormatBool(f)))
+			time.Since(start), metrics.StringTag("duplicate", strconv.FormatBool(f)))
 	}()
 	// We want to effectively do a prioritized select, but Go select is random
 	// if multiple cases are ready, so split into multiple selects.
@@ -433,7 +443,6 @@ func (tm *TaskMatcher) poll(
 	// 2. taskC and queryTaskC
 	select {
 	case task := <-taskC:
-		tm.log("polled local ready task")
 		if task.responseC != nil {
 			tm.metricsHandler.Counter(metrics.PollSuccessWithSyncPerTaskQueueCounter.GetMetricName()).Record(1)
 		}
@@ -452,7 +461,6 @@ func (tm *TaskMatcher) poll(
 		tm.metricsHandler.Counter(metrics.PollTimeoutPerTaskQueueCounter.GetMetricName()).Record(1)
 		return nil, false, errNoTasks
 	case task := <-taskC:
-		tm.log("polled local middle")
 		if task.responseC != nil {
 			tm.metricsHandler.Counter(metrics.PollSuccessWithSyncPerTaskQueueCounter.GetMetricName()).Record(1)
 		}
@@ -463,10 +471,8 @@ func (tm *TaskMatcher) poll(
 		tm.metricsHandler.Counter(metrics.PollSuccessPerTaskQueueCounter.GetMetricName()).Record(1)
 		return task, false, nil
 	case token := <-tm.fwdrPollReqTokenC():
-		tm.log("Forwarding Poll with backlog Age: %s len of tackC: %d", tm.getBacklogAge(), len(taskC))
 		if task, err := tm.fwdr.ForwardPoll(ctx, pollMetadata); err == nil {
 			token.release()
-			tm.log("polled remote")
 			return task, true, nil
 		}
 		token.release()
@@ -478,7 +484,6 @@ func (tm *TaskMatcher) poll(
 		tm.metricsHandler.Counter(metrics.PollTimeoutPerTaskQueueCounter.GetMetricName()).Record(1)
 		return nil, false, errNoTasks
 	case task := <-taskC:
-		tm.log("polled local blocked")
 		if task.responseC != nil {
 			tm.metricsHandler.Counter(metrics.PollSuccessWithSyncPerTaskQueueCounter.GetMetricName()).Record(1)
 		}
@@ -496,13 +501,11 @@ func (tm *TaskMatcher) fwdrPollReqTokenC() <-chan *ForwarderReqToken {
 		return nil
 	}
 
-	ba := tm.getBacklogAge()
-	if tm.config.NewForward() && ba != NO_BACKLOG {
-		return nil
-	}
-
-	tm.log("Allowing Poll forwarding with backlog Age: %s len of tackC: %d", ba, len(tm.taskC))
 	return tm.fwdr.PollReqTokenC()
+}
+
+func (tm *TaskMatcher) isBacklogNegligible() bool {
+	return tm.getBacklogAge() < tm.config.BacklogNegligibleAge()
 }
 
 func (tm *TaskMatcher) fwdrAddReqTokenC() <-chan *ForwarderReqToken {
@@ -510,13 +513,6 @@ func (tm *TaskMatcher) fwdrAddReqTokenC() <-chan *ForwarderReqToken {
 		return nil
 	}
 
-	ba := tm.getBacklogAge()
-	if tm.config.NewForward() && ba != NO_BACKLOG {
-		tm.log("Rejected Task forwarding with backlog Age: %s len of tackC: %d", ba, len(tm.taskC))
-		return nil
-	}
-
-	tm.log("Allowing Task forwarding with backlog Age: %s len of tackC: %d", ba, len(tm.taskC))
 	return tm.fwdr.AddReqTokenC()
 }
 
@@ -528,8 +524,6 @@ func (tm *TaskMatcher) registerBacklogTask(task *internalTask) {
 	tm.backlogTasksLock.Lock()
 	defer tm.backlogTasksLock.Unlock()
 
-	tm.log("registering")
-
 	ts := task.event.Data.CreateTime.UnixNano()
 	tm.backlogTasksCreateTime[ts] += 1
 }
@@ -538,7 +532,6 @@ func (tm *TaskMatcher) unregisterBacklogTask(task *internalTask) {
 	tm.backlogTasksLock.Lock()
 	defer tm.backlogTasksLock.Unlock()
 
-	tm.log("unregistering")
 	ts := task.event.Data.CreateTime.UnixNano()
 	counter := tm.backlogTasksCreateTime[ts]
 	if counter == 1 {
@@ -548,14 +541,12 @@ func (tm *TaskMatcher) unregisterBacklogTask(task *internalTask) {
 	}
 }
 
-const NO_BACKLOG time.Duration = -1
-
 func (tm *TaskMatcher) getBacklogAge() time.Duration {
 	tm.backlogTasksLock.RLock()
 	defer tm.backlogTasksLock.RUnlock()
 
 	if len(tm.backlogTasksCreateTime) == 0 {
-		return NO_BACKLOG
+		return emptyBacklogAge
 	}
 	//fmt.Printf("backlog len: %d\n", len(tm.backlogTasksCreateTime))
 	oldest := int64(math.MaxInt64)
@@ -567,18 +558,18 @@ func (tm *TaskMatcher) getBacklogAge() time.Duration {
 
 	return time.Since(time.Unix(0, oldest))
 }
-
-func (tm *TaskMatcher) log(msg string, args ...any) {
-	if tm.taskqueue.taskType != enums.TASK_QUEUE_TYPE_ACTIVITY  || strings.HasPrefix(tm.taskqueue.Name.BaseNameString(), "temporal") {
-		return
-	}
-	fmt.Printf("%s %s (%d) \t", time.Now().Format("15:04:05.999"), tm.name(), tm.pollers.Load())
-	fmt.Printf(msg+"\n", args...)
-}
-
-func (tm *TaskMatcher) name() any {
-	if tm.fwdr == nil {
-		return "[ROOT]"
-	}
-	return fmt.Sprintf("[P%d]",tm.taskqueue.Partition())
-}
+//
+//func (tm *TaskMatcher) log(msg string, args ...any) {
+//	if tm.taskqueue.taskType != enums.TASK_QUEUE_TYPE_ACTIVITY || strings.HasPrefix(tm.taskqueue.Name.BaseNameString(), "temporal") {
+//		return
+//	}
+//	fmt.Printf("%s %s \t", time.Now().Format("15:04:05.999"), tm.name())
+//	fmt.Printf(msg+"\n", args...)
+//}
+//
+//func (tm *TaskMatcher) name() any {
+//	if tm.fwdr == nil {
+//		return "[ROOT]"
+//	}
+//	return fmt.Sprintf("[P%d]", tm.taskqueue.Partition())
+//}
